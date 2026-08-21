@@ -27,6 +27,7 @@ npm run build      # type-check and bundle to dist/
 npm run soak         # 120 worlds x 3000 years, headless, with assertions
 npm run history      # print one world's chronicle as the player would read it
 npm run verify-save  # prove a reloaded world is the same world
+npm run verify-motion # prove the sea still moves
 npm run shot         # render the reference screenshots headlessly
 npm run probe        # check the terrain function's statistics
 ```
@@ -59,6 +60,10 @@ The planet, the simulation living on it, and an interface to nudge it.
   and depth comes from the depth buffer.
 - **Physically-based atmospheric scattering**, with aerial perspective, a glowing limb,
   and golden hour on the ground.
+- **Water that moves at every scale.** Three wave bands, each fading out once it drops
+  below about four pixels; whatever fades out of the geometry becomes roughness instead,
+  so the sun's reflection broadens into real glitter rather than the sea going glassy as
+  you climb. Shorelines surge in and out, break into foam, and refract the sea floor.
 - **A visual regression harness** that drives the camera to fixed viewpoints and captures
   them headlessly.
 
@@ -92,7 +97,8 @@ balance tools. Seed plus player-event log reproduces any history exactly.
 
 ## Where the interesting problems are
 
-See [`docs/PLAN.md`](docs/PLAN.md) for the full plan. The parts worth reading:
+[`docs/ROADMAP.md`](docs/ROADMAP.md) is what happens next and why, in order.
+[`docs/PLAN.md`](docs/PLAN.md) is the full technical plan. The parts worth reading:
 
 - **Why the atmosphere's scale height follows the camera.** How far you can see before the
   air whites out and how blue the sky is overhead are not independent — their ratio is
