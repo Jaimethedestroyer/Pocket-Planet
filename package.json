@@ -9,7 +9,10 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
     "typecheck": "tsc --noEmit",
-    "shot": "node tools/shots.mjs"
+    "shot": "node tools/shots.mjs",
+    "soak": "tsx tools/soak.ts",
+    "probe": "tsx tools/probe-terrain.ts",
+    "history": "tsx tools/history.ts"
   },
   "dependencies": {
     "three": "^0.169.0"
