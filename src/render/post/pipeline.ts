@@ -140,6 +140,9 @@ export class RenderPipeline {
 
   private invProjView = new THREE.Matrix4();
   private forward = new THREE.Vector3();
+  private right = new THREE.Vector3();
+  private upAxis = new THREE.Vector3();
+  private tmpBasis = new THREE.Vector3();
   /** Camera altitude above sea level, set each frame by the app. */
   camAltitude = 1000;
 
@@ -165,6 +168,8 @@ export class RenderPipeline {
         uInvProjView: { value: new THREE.Matrix4() },
         uCameraPos: shared.uCameraPos,
         uCameraForward: { value: new THREE.Vector3() },
+        uCameraRight: { value: new THREE.Vector3() },
+        uCameraUp: { value: new THREE.Vector3() },
         uNear: { value: 1 },
         uFar: { value: 1000 },
         uSunDir: shared.uSunDir,
@@ -185,6 +190,7 @@ export class RenderPipeline {
         // only artistic dial: how bright the sky reads against lit ground.
         uAtmosphereStrength: { value: 3.4 },
         uProjScale: { value: 1000 },
+        uTanHalfFov: { value: 0.5 },
       },
       depthTest: false,
       depthWrite: false,
@@ -287,8 +293,9 @@ export class RenderPipeline {
 
   render(scene: THREE.Scene, camera: THREE.PerspectiveCamera): void {
     const r = this.renderer;
-    this.compositeMaterial.uniforms.uProjScale.value =
-      this.height / (2 * Math.tan((camera.fov * Math.PI) / 360));
+    const tanHalfFov = Math.tan((camera.fov * Math.PI) / 360);
+    this.compositeMaterial.uniforms.uProjScale.value = this.height / (2 * tanHalfFov);
+    this.compositeMaterial.uniforms.uTanHalfFov.value = tanHalfFov;
 
 
     // 1. Scene into the HDR target.
@@ -302,6 +309,11 @@ export class RenderPipeline {
     u.uInvProjView.value.copy(this.invProjView);
     camera.getWorldDirection(this.forward);
     u.uCameraForward.value.copy(this.forward);
+    // The camera's screen basis, so the water pass can turn a world-space
+    // surface slope into a screen-space refraction offset.
+    camera.matrixWorld.extractBasis(this.right, this.upAxis, this.tmpBasis);
+    u.uCameraRight.value.copy(this.right);
+    u.uCameraUp.value.copy(this.upAxis);
     u.uNear.value = camera.near;
     u.uFar.value = camera.far;
     u.tScene.value = this.sceneTarget.texture;

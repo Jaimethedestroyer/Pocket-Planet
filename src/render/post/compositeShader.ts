@@ -32,6 +32,8 @@ uniform sampler2D tDepth;
 uniform mat4 uInvProjView;
 uniform vec3 uCameraPos;
 uniform vec3 uCameraForward;
+uniform vec3 uCameraRight;
+uniform vec3 uCameraUp;
 uniform float uNear;
 uniform float uFar;
 
@@ -48,6 +50,7 @@ uniform float uScaleHeightR;
 uniform float uScaleHeightM;
 uniform float uAtmosphereStrength;
 uniform float uProjScale;
+uniform float uTanHalfFov;
 
 varying vec2 vUv;
 
@@ -194,35 +197,107 @@ void scatter(
 /* ------------------------------------------------------------------ ocean */
 
 /**
- * Animated surface normal.
+ * One band of the wave stack.
  *
- * Waves are about a metre across, so whether they can be drawn at all depends
- * on how much world space one pixel covers here — which at a grazing angle
- * across an ocean is vastly more than the distance alone suggests. Fading on
- * that footprint rather than on distance is the difference between a moving
- * sea and a field of white speckle.
+ * The weight argument is how much of this band survives at the current pixel
+ * footprint. A band is either large enough to resolve — in which case it is
+ * animated and contributes a real gradient — or it is gone. Nothing is ever
+ * drawn at a frequency the screen cannot represent, which is what keeps an
+ * ocean seen at a grazing angle from turning into crawling speckle.
+ *
+ * Single-octave value noise per band, not fBm: the stack already provides the
+ * octaves, and four texture-free samples a band is affordable in a fullscreen
+ * pass where twelve would not be.
  */
-vec3 waterNormal(vec3 pos, vec3 up, vec3 dir, float dist) {
-  float grazing = max(dot(up, -dir), 0.06);
-  float footprint = (dist / uProjScale) / grazing;
-  float detail = 1.0 - smoothstep(0.22, 1.0, footprint);
-  if (detail < 0.01) return up;
-
-  // Two scrolling octaves: a slow swell and a finer chop over it.
-  vec3 q = pos * 0.55 + vec3(0.0, uTime * 0.05, 0.0);
-  vec3 r = pos * 1.7 - vec3(uTime * 0.09, 0.0, uTime * 0.06);
-  float fine = 1.0 - smoothstep(0.08, 0.35, footprint);
-  float e = 0.06;
-  float n0 = fbm3(q) + fbm3(r) * 0.35 * fine;
-  float nx = fbm3(q + vec3(e, 0.0, 0.0)) + fbm3(r + vec3(e, 0.0, 0.0)) * 0.35 * fine;
-  float ny = fbm3(q + vec3(0.0, e, 0.0)) + fbm3(r + vec3(0.0, e, 0.0)) * 0.35 * fine;
-  float nz = fbm3(q + vec3(0.0, 0.0, e)) + fbm3(r + vec3(0.0, 0.0, e)) * 0.35 * fine;
-  vec3 grad = vec3(nx - n0, ny - n0, nz - n0);
-  // Project out the component along the normal so the wave stays a wave.
-  grad -= up * dot(grad, up);
-  return normalize(up + grad * 4.0 * detail);
+vec3 waveBand(vec3 pos, float lambda, float speed, vec3 drift, float weight) {
+  if (weight <= 0.003) return vec3(0.0);
+  float f = 6.2831853 / lambda;
+  vec3 q = pos * f + drift * (uTime * speed);
+  const float e = 0.28;
+  float n0 = vnoise(q);
+  vec3 g = vec3(
+    vnoise(q + vec3(e, 0.0, 0.0)) - n0,
+    vnoise(q + vec3(0.0, e, 0.0)) - n0,
+    vnoise(q + vec3(0.0, 0.0, e)) - n0);
+  return g * (weight / e);
 }
 
+/**
+ * How much of a wavelength survives at this pixel footprint.
+ *
+ * A wave needs several pixels across it to read as a wave rather than as
+ * noise, so a band is gone well before it reaches one pixel — the cutoff is at
+ * roughly four pixels per wavelength, not one.
+ */
+float bandWeight(float lambda, float footprint) {
+  return 1.0 - smoothstep(lambda * 0.06, lambda * 0.22, footprint);
+}
+
+/** Trowbridge-Reitz, for a sun glint that widens as waves go sub-pixel. */
+float ggx(float ndh, float rough) {
+  float a = rough * rough;
+  float a2 = a * a;
+  float d = ndh * ndh * (a2 - 1.0) + 1.0;
+  return a2 / (PI * d * d + 1e-7);
+}
+
+struct Water {
+  vec3 normal;
+  float roughness;
+};
+
+/**
+ * The sea surface: an animated normal plus the roughness of everything too
+ * small to animate.
+ *
+ * The second half matters as much as the first. Waves below a pixel do not
+ * vanish physically, they become microfacets — so as each band fades out of the
+ * normal it is folded into the roughness instead, and the sun's reflection
+ * broadens from a hard spark into the wide glitter path an ocean actually shows
+ * from altitude. Without it the sea is a mirror the moment you climb, which is
+ * the single most obvious tell that water is being faked.
+ */
+Water seaSurface(vec3 pos, vec3 up, vec3 dir, float dist) {
+  float grazing = max(dot(up, -dir), 0.05);
+  float footprint = (dist / uProjScale) / grazing;
+
+  // Long swell, wind chop, and surface ripple.
+  float wSwell = bandWeight(18.0, footprint);
+  float wChop = bandWeight(4.5, footprint);
+  float wRipple = bandWeight(1.1, footprint);
+
+  vec3 grad = vec3(0.0);
+  grad += waveBand(pos, 18.0, 0.9, vec3(0.7, 0.2, 0.6), wSwell);
+  grad += waveBand(pos, 4.5, 2.1, vec3(-0.5, 0.1, 0.85), wChop * 0.45);
+  grad += waveBand(pos, 1.1, 4.5, vec3(0.9, 0.0, -0.4), wRipple * 0.2);
+
+  // Project out the component along the normal so a wave stays a wave.
+  grad -= up * dot(grad, up);
+
+  Water w;
+  // Kept small on purpose. The water is shaded through a Fresnel term raised
+  // to the fifth power, and at the grazing angles you see most of an ocean at,
+  // that turns a modest slope into a huge swing in reflectance — a normal
+  // strong enough to look right head-on stipples the whole sea at the horizon.
+  w.normal = normalize(up + grad * 0.16);
+  // Whatever faded out of the geometry reappears as microfacet roughness.
+  float resolved = (wSwell * 0.25 + wChop * 0.3 + wRipple * 0.45);
+  w.roughness = mix(0.34, 0.045, resolved);
+  return w;
+}
+
+/**
+ * How far the tide has run up the beach, 0..1.
+ *
+ * A slow surge, out of phase from one stretch of coast to the next so the whole
+ * planet does not breathe in unison. This is what animates a shoreline at zoom
+ * levels where individual waves are far too small to see: the waterline itself
+ * moves.
+ */
+float shoreSurge(vec3 pos) {
+  float phase = vnoise(pos * 0.012) * 6.2831853;
+  return 0.5 + 0.5 * sin(uTime * 0.55 + phase);
+}
 void main() {
   // Reconstruct the world-space view ray for this pixel.
   vec4 far = uInvProjView * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
@@ -249,47 +324,76 @@ void main() {
   if (sea.x > 0.0 && sea.x < sceneDist) {
     vec3 surface = uCameraPos + dir * sea.x;
     vec3 up = normalize(surface);
-    vec3 N = waterNormal(surface, up, dir, sea.x);
+    Water w = seaSurface(surface, up, dir, sea.x);
+    vec3 N = w.normal;
 
-    // How much water the ray passes through before hitting the sea floor.
+    // How much water the ray passes through before reaching the sea floor.
     float depth = hitScene ? (sceneDist - sea.x) : (sea.y - sea.x);
     depth = max(depth, 0.0);
 
-    // Absorption: the sea floor's colour is progressively replaced by the
-    // water's own, which is what makes shallows legible and deeps opaque.
-    // Absorption lengths are tuned to this planet's bathymetry, not Earth's:
-    // the deepest trench here is about 22 m, so water has to reach its full
-    // colour within a few metres or every sea reads as a bright lagoon.
-    const vec3 SHALLOW = vec3(0.050, 0.26, 0.30);
+    // Refraction. The sea floor is displaced by the surface slope, which is
+    // what makes shallow water shimmer. The offset is scaled by depth so it
+    // vanishes exactly at the waterline — otherwise it drags land colour out
+    // across the shore and fringes every beach.
+    vec3 slope = N - up;
+    // Apparent displacement of the floor, in metres, converted to a UV offset:
+    // the frustum spans 2*tan(fov/2)*distance world units vertically.
+    float disp = 0.4 * min(depth, 3.0);
+    vec2 offset = vec2(dot(slope, uCameraRight), dot(slope, uCameraUp))
+                * disp / (2.0 * uTanHalfFov * max(sea.x, 1.0));
+    offset = clamp(offset, vec2(-0.03), vec2(0.03));
+    vec3 floorColor = texture2D(tScene, vUv + offset).rgb;
+
+    // Absorption: the floor's colour is progressively replaced by the water's
+    // own. The lengths are tuned to this planet's bathymetry, not Earth's —
+    // the deepest trench here is 22 m — but kept deliberately soft, because a
+    // sharp ramp turns a one-metre LOD wobble in the sea floor into a visible
+    // band of colour crawling along the coast.
+    const vec3 SHALLOW = vec3(0.055, 0.30, 0.33);
     const vec3 DEEP    = vec3(0.003, 0.026, 0.072);
-    float absorb = 1.0 - exp(-depth * 0.34);
-    vec3 body = mix(color * vec3(0.42, 0.74, 0.82), SHALLOW, absorb);
-    body = mix(body, DEEP, 1.0 - exp(-depth * 0.115));
+    float absorb = 1.0 - exp(-depth * 0.24);
+    vec3 body = mix(floorColor * vec3(0.44, 0.76, 0.84), SHALLOW, absorb);
+    body = mix(body, DEEP, 1.0 - exp(-depth * 0.085));
 
     float shade = clamp(dot(up, uSunDir) * 1.4 + 0.12, 0.0, 1.0);
     body *= mix(0.10, 1.0, shade);
 
-    // Fresnel towards a simple sky tint. A full reflection probe is not worth
-    // it here: at these angles the sky is nearly uniform anyway.
+    // Fresnel towards a simple sky tint. A reflection probe is not worth it
+    // here: at these angles the sky is close to uniform anyway.
     float fres = 0.02 + 0.98 * pow(1.0 - max(dot(N, -dir), 0.0), 5.0);
     vec3 skyTint = mix(vec3(0.16, 0.28, 0.46), vec3(0.55, 0.70, 0.95), shade);
     vec3 water = mix(body, skyTint * (0.25 + 0.75 * shade), fres * 0.85);
 
-    // Sun glint.
+    // Sun glint, broadening with the roughness the wave stack handed back.
     vec3 H = normalize(uSunDir - dir);
-    float spec = pow(max(dot(N, H), 0.0), 400.0);
-    water += uSunColor * uSunIntensity * spec * 0.35 * step(0.0, dot(up, uSunDir));
+    float glint = ggx(max(dot(N, H), 0.0), w.roughness);
+    water += uSunColor * uSunIntensity * glint * 0.035
+           * step(0.0, dot(up, uSunDir)) * fres;
 
-    // Shoreline foam, only where the sea floor is nearly at the surface.
-    // Foam only right at the waterline. Widening this at all turns the whole
-    // continental shelf white, because a shelf on this planet is only metres
-    // deep across kilometres of coast.
-    if (hitScene && depth < 1.2) {
-      float band = smoothstep(1.0, 0.05, depth);
-      float churnScale = 1.0 - smoothstep(0.08, 0.5, (sea.x / uProjScale));
-      float churn = mix(0.5, fbm3(surface * 2.2 + vec3(uTime * 0.35)), churnScale);
-      float foam = band * smoothstep(0.38, 0.86, churn + band * 0.18);
-      water = mix(water, vec3(0.82, 0.89, 0.93) * (0.25 + 0.75 * shade), foam * 0.6);
+    /* --- Surf ------------------------------------------------------------ */
+    if (hitScene && depth < 3.2) {
+      float surge = shoreSurge(surface);
+      // The waterline itself advances and retreats, which is what reads as
+      // motion at zoom levels where a single wave is far below a pixel.
+      float reach = mix(0.5, 1.9, surge);
+      float band = smoothstep(reach, 0.0, depth);
+
+      // Broken water, scrolling shoreward and stretched along the coast.
+      float footprint = sea.x / uProjScale;
+      float churnDetail = 1.0 - smoothstep(0.05, 0.45, footprint);
+      float churn = mix(
+        0.55,
+        vnoise(surface * 1.9 + vec3(0.0, uTime * 0.9, 0.0)) * 0.6
+          + vnoise(surface * 5.5 - vec3(uTime * 1.7, 0.0, 0.0)) * 0.4,
+        churnDetail);
+
+      float foam = band * smoothstep(0.32, 0.86, churn + band * 0.30);
+      // A thin bright lip right at the edge, always present regardless of the
+      // noise, so the waterline never disappears entirely between surges.
+      foam = max(foam, smoothstep(0.35, 0.0, depth) * 0.55);
+
+      vec3 foamColor = vec3(0.86, 0.92, 0.95) * (0.28 + 0.72 * shade);
+      water = mix(water, foamColor, clamp(foam, 0.0, 1.0) * 0.8);
     }
 
     color = water;

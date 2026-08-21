@@ -13,7 +13,8 @@
     "soak": "tsx tools/soak.ts",
     "probe": "tsx tools/probe-terrain.ts",
     "history": "tsx tools/history.ts",
-    "verify-save": "node tools/verify-save.mjs"
+    "verify-save": "node tools/verify-save.mjs",
+    "verify-motion": "node tools/verify-motion.mjs"
   },
   "dependencies": {
     "three": "^0.169.0"

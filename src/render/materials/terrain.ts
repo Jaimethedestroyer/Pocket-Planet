@@ -126,10 +126,20 @@ void main() {
     albedo = biomeColor(temperature, moisture);
     albedo = groundVariation(albedo, vWorldPos, moisture);
 
-    // Beaches: a narrow sand band just above the waterline, only where the
-    // ground is flat enough for sand to gather.
-    float beach = smoothstep(1.8, 0.1, height) * smoothstep(0.35, 0.1, slope);
-    albedo = mix(albedo, C_SAND, beach);
+    // Beaches: a sand band above the waterline, only where the ground is flat
+    // enough for sand to gather. Deliberately wider and softer than the water
+    // pass's shallow-water ramp — when the two transitions were the same width
+    // they met edge to edge at the waterline and read as two different
+    // materials butting together instead of one shore.
+    float beach = smoothstep(3.2, 0.2, height) * smoothstep(0.4, 0.12, slope);
+    albedo = mix(albedo, C_SAND, beach * 0.92);
+
+    // Wet sand. The strip the water has just been over is darker and shinier
+    // than the dry beach behind it, and it is the single cheapest thing that
+    // makes land and sea look like they belong to each other rather than being
+    // composited over one another.
+    float wet = smoothstep(1.4, 0.0, height) * smoothstep(0.45, 0.15, slope);
+    albedo *= mix(1.0, 0.58, wet);
 
     // Exposed rock on anything steep.
     vec3 rock = mix(C_ROCK, C_ROCK_WARM, temperature);
@@ -154,6 +164,10 @@ void main() {
   // the ground under your feet turns into pure aliasing out there.
   float camDist = length(cameraPosition - vWorldPos);
   float detail = uDetailStrength * (1.0 - smoothstep(40.0, 300.0, camDist));
+  // Never underwater. Seabed grain seen through the water fights the water's
+  // own surface detail, and the two crawling against each other at the
+  // shoreline is exactly the clash it looks like.
+  detail *= smoothstep(-0.5, 2.5, height);
 
   if (detail > 0.002) {
     vec3 dp = vWorldPos * 0.35;
@@ -220,7 +234,9 @@ void main() {
 
   // A dull sheen on wet ground and snow, enough to catch the low sun.
   float wetness = height > 0.0
-    ? max(smoothstep(0.62, 0.9, vData.y) * 0.25, smoothstep(0.3, 0.1, vData.z) * 0.4)
+    ? max(
+        max(smoothstep(0.62, 0.9, vData.y) * 0.25, smoothstep(0.3, 0.1, vData.z) * 0.4),
+        smoothstep(1.4, 0.0, height) * 0.65)
     : 0.5;
   vec3 V = normalize(cameraPosition - vWorldPos);
   vec3 H = normalize(V + uSunDir);
