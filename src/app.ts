@@ -129,7 +129,7 @@ export class PocketPlanetApp {
 
     // The simulation runs in its own worker on its own clock, so history
     // advances at the same rate whether the renderer is managing 60 fps or 20.
-    this.sim = new SimClient(this.seed, opts.cellCount ?? 4096);
+    this.sim = new SimClient(opts.seed ?? 'pocket-planet', opts.cellCount ?? 4096);
     this.terrainMaterial.uniforms.tTerritory.value = this.sim.territoryTexture;
 
     this.settlements = new SettlementLayer(this.environment.uniforms);

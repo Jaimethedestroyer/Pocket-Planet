@@ -33,6 +33,30 @@ export interface SimPolicyMessage {
   value: number;
 }
 
+/** One entry in the replay log. The tick is authoritative, not the wall clock. */
+export interface PolicyChange {
+  tick: number;
+  polity: number;
+  index: number;
+  value: number;
+}
+
+/**
+ * Restore a saved world.
+ *
+ * The save is a seed and a list of policy changes, nothing else. Replaying it
+ * reconstructs the planet exactly, which is only possible because the
+ * simulation is deterministic — and is why that property is asserted in the
+ * soak harness rather than merely hoped for.
+ */
+export interface SimRestoreMessage {
+  type: 'restore';
+  targetTick: number;
+  policyLog: PolicyChange[];
+  /** Years to advance for time that passed while the game was closed. */
+  offlineYears: number;
+}
+
 /** Catch up after the tab was hidden or the app was closed. */
 export interface SimCatchUpMessage {
   type: 'catchup';
@@ -43,7 +67,8 @@ export type SimCommand =
   | SimInitMessage
   | SimSpeedMessage
   | SimPolicyMessage
-  | SimCatchUpMessage;
+  | SimCatchUpMessage
+  | SimRestoreMessage;
 
 /** Sent once, after the world is generated. */
 export interface SimReadyMessage {
@@ -98,6 +123,10 @@ export interface SimStateMessage {
   chronicle: { tick: number; text: string; weight: number }[];
   totalPopulation: number;
   livingPolities: number;
+  /** The replay log, sent whenever it has grown so the client can persist it. */
+  policyLog?: PolicyChange[];
+  /** Set once after a restore that advanced time: the welcome-back summary. */
+  digest?: string[];
 }
 
 export type SimMessage = SimReadyMessage | SimStateMessage;

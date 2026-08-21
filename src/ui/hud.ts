@@ -56,6 +56,7 @@ export class Hud {
   private stateSwatch: HTMLElement;
   private feedEl: HTMLElement;
   private policyPanel: HTMLElement;
+  private digestPanel!: HTMLElement;
   private policyRows: { name: string; fill: HTMLElement; value: HTMLElement }[] = [];
   private speedButtons: HTMLButtonElement[] = [];
 
@@ -85,6 +86,14 @@ export class Hud {
         <div class="pp-speeds" id="pp-speeds"></div>
       </div>
 
+      <div class="pp-digest" id="pp-digest" hidden>
+        <div class="pp-digest-inner">
+          <b id="pp-digest-head"></b>
+          <div id="pp-digest-lines"></div>
+          <button class="pp-btn pp-digest-ok" id="pp-digest-ok">Continue</button>
+        </div>
+      </div>
+
       <div class="pp-policies" id="pp-policies" hidden>
         <div class="pp-policies-head">
           <b>Priorities</b>
@@ -101,6 +110,10 @@ export class Hud {
     this.stateSwatch = this.root.querySelector('#pp-swatch')!;
     this.feedEl = this.root.querySelector('#pp-feed')!;
     this.policyPanel = this.root.querySelector('#pp-policies')!;
+    this.digestPanel = this.root.querySelector('#pp-digest')!;
+    this.root.querySelector('#pp-digest-ok')!.addEventListener('click', () => {
+      this.digestPanel.setAttribute('hidden', '');
+    });
 
     this.buildSpeeds();
     this.buildPolicies();
@@ -177,6 +190,30 @@ export class Hud {
       host.appendChild(row);
       this.policyRows.push({ name, fill, value });
     });
+  }
+
+  /**
+   * The welcome-back card, shown once when returning to a world that kept
+   * running. This is the whole point of the game's shape: the interesting part
+   * is not what you did, it is what happened while you were not watching.
+   */
+  showDigest(lines: string[]): void {
+    if (lines.length === 0) return;
+    const [head, ...rest] = lines;
+    this.root.querySelector('#pp-digest-head')!.textContent = head;
+    const host = this.root.querySelector('#pp-digest-lines')!;
+    host.innerHTML = '';
+    if (rest.length === 0) {
+      const el = document.createElement('p');
+      el.textContent = 'The world turned quietly.';
+      host.appendChild(el);
+    }
+    for (const line of rest) {
+      const el = document.createElement('p');
+      el.textContent = line;
+      host.appendChild(el);
+    }
+    this.digestPanel.removeAttribute('hidden');
   }
 
   /** Called whenever the simulation reports new state. */

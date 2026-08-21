@@ -24,10 +24,11 @@ npm install
 npm run dev        # then open the printed LAN address on your phone
 npm run build      # type-check and bundle to dist/
 
-npm run soak       # 120 worlds x 3000 years, headless, with assertions
-npm run history    # print one world's chronicle as the player would read it
-npm run shot       # render the reference screenshots headlessly
-npm run probe      # check the terrain function's statistics
+npm run soak         # 120 worlds x 3000 years, headless, with assertions
+npm run history      # print one world's chronicle as the player would read it
+npm run verify-save  # prove a reloaded world is the same world
+npm run shot         # render the reference screenshots headlessly
+npm run probe        # check the terrain function's statistics
 ```
 
 Deploys to Vercel as-is: Vite preset, `npm run build`, output `dist`.
@@ -67,6 +68,11 @@ The planet, the simulation living on it, and an interface to nudge it.
 - **Territory painted as a field**, not as cells — borders are curves the shader
   discovers where two colour fields meet, and the simulation's graph is never visible.
 - **A chronicle** generated from a template grammar: deterministic, instant, offline.
+- **Saves that are a seed and a list of dial changes.** Loading replays history from
+  year one. Eight hundred years of a world reconstruct exactly from **145 bytes**, and
+  `npm run verify-save` proves it in a real browser on every change.
+- **Offline progress.** Time keeps passing while the game is closed; coming back opens
+  on what happened while you were away.
 
 | | |
 |---|---|

@@ -11,11 +11,15 @@ import {
   TERRITORY_WIDTH,
 } from '../sim/protocol';
 import type {
+  PolicyChange,
   PolityView,
   SettlementView,
   SimCommand,
   SimMessage,
 } from '../sim/protocol';
+import { hashSeed } from '../core/rng';
+import { loadSave, offlineYears, writeSave } from './save';
+import type { SaveFile } from './save';
 
 export interface ChronicleLine {
   tick: number;
@@ -47,8 +51,24 @@ export class SimClient {
 
   onReady: (() => void) | null = null;
   onState: (() => void) | null = null;
+  /** Fired once after a restore that advanced time while the game was closed. */
+  onDigest: ((lines: string[]) => void) | null = null;
 
-  constructor(seed: number, cellCount = 4096, startingPolities = 3) {
+  private seedText: string;
+  private cellCount: number;
+  private policyLog: PolicyChange[] = [];
+  private restored: SaveFile | null = null;
+  private saveTimer = 0;
+
+  constructor(seedText: string, cellCount = 4096, startingPolities = 3) {
+    this.seedText = seedText;
+    this.cellCount = cellCount;
+
+    // A save only applies to the world it came from; changing the seed in the
+    // URL should give a new planet, not a corrupted old one.
+    const save = loadSave();
+    this.restored = save && save.seed === seedText && save.cellCount === cellCount ? save : null;
+    const seed = hashSeed(seedText);
     const data = new Uint8Array(TERRITORY_WIDTH * TERRITORY_HEIGHT * 4);
     this.territoryTexture = new THREE.DataTexture(
       data,
@@ -70,6 +90,39 @@ export class SimClient {
     });
     this.worker.onmessage = (e: MessageEvent<SimMessage>) => this.onMessage(e.data);
     this.send({ type: 'init', seed, cellCount, startingPolities });
+
+    // Persist on a slow timer and whenever the page is backgrounded, which on
+    // a phone is the moment that actually matters: closing the tab, switching
+    // apps, or locking the screen all fire visibilitychange, and none of them
+    // reliably fire anything else.
+    this.saveTimer = window.setInterval(() => this.save(), 15000);
+    document.addEventListener('visibilitychange', this.onVisibility);
+    window.addEventListener('pagehide', this.onPageHide);
+  }
+
+  private onVisibility = (): void => {
+    if (document.visibilityState === 'hidden') this.save();
+  };
+
+  private onPageHide = (): void => {
+    this.save();
+  };
+
+  /** True when this session continued a stored world rather than starting one. */
+  get continued(): boolean {
+    return this.restored !== null;
+  }
+
+  save(): void {
+    if (!this.ready || this.tick <= 0) return;
+    writeSave({
+      version: 1,
+      seed: this.seedText,
+      cellCount: this.cellCount,
+      tick: this.tick,
+      policyLog: this.policyLog,
+      savedAt: Date.now(),
+    });
   }
 
   private send(command: SimCommand): void {
@@ -82,6 +135,16 @@ export class SimClient {
       this.cellHeights = msg.heights;
       this.worldBuildMs = msg.buildMs;
       this.ready = true;
+
+      if (this.restored) {
+        this.send({
+          type: 'restore',
+          targetTick: this.restored.tick,
+          policyLog: this.restored.policyLog,
+          offlineYears: offlineYears(this.restored.savedAt),
+        });
+      }
+
       this.onReady?.();
       return;
     }
@@ -97,6 +160,9 @@ export class SimClient {
       this.territoryTexture.image.data.set(msg.territory);
       this.territoryTexture.needsUpdate = true;
     }
+
+    if (msg.policyLog) this.policyLog = msg.policyLog;
+    if (msg.digest) this.onDigest?.(msg.digest);
 
     if (msg.chronicle.length > 0) {
       this.chronicle.push(...msg.chronicle);
@@ -134,6 +200,10 @@ export class SimClient {
   }
 
   dispose(): void {
+    this.save();
+    window.clearInterval(this.saveTimer);
+    document.removeEventListener('visibilitychange', this.onVisibility);
+    window.removeEventListener('pagehide', this.onPageHide);
     this.worker.terminate();
     this.territoryTexture.dispose();
   }

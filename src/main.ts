@@ -51,6 +51,7 @@ app.sim.onState = () => {
   previousOnState?.();
   gameHud.update();
 };
+app.sim.onDigest = (lines) => gameHud.showDigest(lines);
 
 app.start();
 

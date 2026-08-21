@@ -153,7 +153,10 @@ body {
 
 .pp-year {
   text-align: center;
-  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.85);
+  padding: 5px 16px 6px;
+  border-radius: 12px;
+  background: rgba(6, 10, 17, 0.5);
+  backdrop-filter: blur(10px);
 }
 
 .pp-year b {
@@ -181,31 +184,45 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  gap: 3px;
-  max-height: 42vh;
+  gap: 4px;
+  max-height: 38vh;
   overflow: hidden;
   /* Older lines fade out at the top rather than being cut off. */
   mask-image: linear-gradient(to bottom, transparent, black 34%);
   -webkit-mask-image: linear-gradient(to bottom, transparent, black 34%);
 }
 
+/* Each entry is its own pill. A text shadow alone is not enough contrast over
+   a sunlit continent, and a single block behind the whole feed would cover far
+   more of the planet than the text actually needs. */
 .pp-line {
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(6, 10, 17, 0.62);
+  backdrop-filter: blur(8px);
   font-size: 12px;
   line-height: 1.45;
-  color: #c3cddc;
-  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.95);
+  color: #c8d2e0;
   animation: pp-in 480ms ease both;
 }
 
+/* Fixed-width year keeps a hanging indent, so a wrapped sentence lines up
+   under itself rather than under the date. */
 .pp-line span {
-  display: inline-block;
-  min-width: 44px;
-  color: #6f7d90;
+  flex: 0 0 auto;
+  min-width: 34px;
+  color: #74839a;
   font-variant-numeric: tabular-nums;
 }
 
 .pp-line.major {
-  color: #f0e3c4;
+  color: #f4e6c6;
+  background: rgba(28, 20, 10, 0.66);
 }
 
 @keyframes pp-in {
@@ -386,4 +403,62 @@ body {
   font-size: 10.5px;
   line-height: 1.45;
   color: #6f7d90;
+}
+
+/* Short viewports: the planet is the point, so the feed yields space first. */
+@media (max-height: 720px) {
+  .pp-feed {
+    max-height: 30vh;
+  }
+
+  .pp-policies {
+    max-height: 54vh;
+  }
+}
+
+/* --- Welcome back -------------------------------------------------------- */
+
+.pp-digest {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(3, 6, 12, 0.55);
+  backdrop-filter: blur(3px);
+  pointer-events: auto;
+  animation: pp-in 320ms ease both;
+}
+
+.pp-digest-inner {
+  width: min(400px, 100%);
+  padding: 22px 22px 18px;
+  background: rgba(8, 12, 20, 0.94);
+  border: 1px solid var(--edge);
+  border-radius: 17px;
+}
+
+.pp-digest-inner b {
+  display: block;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  margin-bottom: 14px;
+  color: #f0e6cf;
+}
+
+.pp-digest-inner p {
+  margin: 0 0 9px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #c1cbda;
+}
+
+.pp-digest-ok {
+  width: 100%;
+  margin-top: 8px;
+  padding: 11px;
+  font-size: 12px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
 }

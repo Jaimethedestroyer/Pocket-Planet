@@ -8,10 +8,11 @@
  */
 
 import { Simulation } from '../sim/sim';
-import { chronicle } from '../sim/chronicle';
+import { chronicle, digest } from '../sim/chronicle';
 import { TerritoryPainter } from '../sim/territoryPainter';
 import { toPolityView } from '../sim/protocol';
 import type {
+  PolicyChange,
   SimCommand,
   SimReadyMessage,
   SimStateMessage,
@@ -26,6 +27,10 @@ let lastSentTick = -1;
 let lastChronicleTick = 0;
 let ownershipDirty = true;
 let ownerSignature = 0;
+/** Every policy change, in tick order. This plus the seed is the save file. */
+let policyLog: PolicyChange[] = [];
+let policyLogSent = 0;
+let pendingDigest: string[] | null = null;
 
 const post = (message: unknown, transfer: Transferable[] = []): void => {
   (self as unknown as Worker).postMessage(message, transfer);
@@ -41,7 +46,18 @@ self.onmessage = (event: MessageEvent<SimCommand>) => {
       yearsPerSecond = Math.max(0, msg.yearsPerSecond);
       break;
     case 'policy':
-      sim?.setPolicy(msg.polity, msg.index, msg.value);
+      if (sim) {
+        sim.setPolicy(msg.polity, msg.index, msg.value);
+        policyLog.push({
+          tick: sim.tick,
+          polity: msg.polity,
+          index: msg.index,
+          value: msg.value,
+        });
+      }
+      break;
+    case 'restore':
+      restore(msg.targetTick, msg.policyLog, msg.offlineYears);
       break;
     case 'catchup':
       catchUp(msg.years);
@@ -136,8 +152,60 @@ function sendState(): void {
     livingPolities: stats.livingPolities,
   };
 
+  if (policyLog.length !== policyLogSent) {
+    message.policyLog = policyLog.slice();
+    policyLogSent = policyLog.length;
+  }
+  if (pendingDigest) {
+    message.digest = pendingDigest;
+    pendingDigest = null;
+  }
+
   lastSentTick = sim.tick;
   post(message, territory ? [territory.buffer] : []);
+}
+
+/**
+ * Rebuild a saved world by replaying it, then advance it for the time the
+ * player was away.
+ *
+ * Replay rather than snapshot: at roughly thirty microseconds a tick, even a
+ * ten-thousand-year history reconstructs in well under a second, and the save
+ * stays a few kilobytes no matter how long the planet has been running.
+ */
+function restore(targetTick: number, log: PolicyChange[], offlineYears: number): void {
+  if (!sim) return;
+
+  policyLog = log.slice().sort((a, b) => a.tick - b.tick);
+  policyLogSent = policyLog.length;
+
+  let next = 0;
+  const start = performance.now();
+  while (sim.tick < targetTick) {
+    // Policy changes are applied at the exact tick they were made on, before
+    // that tick runs, or the replay diverges from the original history.
+    while (next < policyLog.length && policyLog[next].tick <= sim.tick) {
+      const change = policyLog[next];
+      sim.setPolicy(change.polity, change.index, change.value);
+      next++;
+    }
+    sim.step();
+  }
+  while (next < policyLog.length) {
+    const change = policyLog[next];
+    sim.setPolicy(change.polity, change.index, change.value);
+    next++;
+  }
+
+  const before = sim.tick;
+  const away = Math.max(0, Math.min(2000, Math.floor(offlineYears)));
+  if (away > 0) sim.run(away);
+
+  lastChronicleTick = before;
+  pendingDigest = away > 0 ? digest(sim, before, 5) : null;
+  ownershipDirty = true;
+  void start;
+  sendState();
 }
 
 function catchUp(years: number): void {
