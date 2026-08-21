@@ -23,7 +23,11 @@ polities that founded them, and ruins get resettled centuries later.
 npm install
 npm run dev        # then open the printed LAN address on your phone
 npm run build      # type-check and bundle to dist/
+
+npm run soak       # 120 worlds x 3000 years, headless, with assertions
+npm run history    # print one world's chronicle as the player would read it
 npm run shot       # render the reference screenshots headlessly
+npm run probe      # check the terrain function's statistics
 ```
 
 Deploys to Vercel as-is: Vite preset, `npm run build`, output `dist`.
@@ -37,10 +41,12 @@ Deploys to Vercel as-is: Vite preset, `npm run build`, output `dist`.
 | `hud=1` | Show the performance HUD (or press `H`) |
 | `lat` `lon` `altitude` `heading` `sun` | Jump to a viewpoint, in degrees and metres |
 | `scale=0.75` | Internal render resolution multiplier |
+| `speed=20` | Years of history per real second |
+| `cells=8192` | Simulation graph resolution |
 
 ## What's built
 
-The planet is finished; the civilization on it is next.
+The planet, the simulation living on it, and an interface to nudge it.
 
 - **Continuous terrain, orbit to ground.** No hexes, no tiles, no visible cells anywhere.
   Terrain is a pure noise function of position on the sphere, evaluated at whatever detail
@@ -55,10 +61,18 @@ The planet is finished; the civilization on it is next.
 - **A visual regression harness** that drives the camera to fixed viewpoints and captures
   them headlessly.
 
+- **A deterministic civilization simulation** running in its own worker on its own
+  clock. Cultures and religions outlive the states that founded them; collapse
+  fragments an empire into successor states rather than ending the game.
+- **Territory painted as a field**, not as cells — borders are curves the shader
+  discovers where two colour fields meet, and the simulation's graph is never visible.
+- **A chronicle** generated from a template grammar: deterministic, instant, offline.
+
 | | |
 |---|---|
 | ![Coast from 150 m](docs/shots/coast.png) | ![Golden hour](docs/shots/dusk.png) |
-| ![Desert coastline](docs/shots/mountains.png) | ![Ground level](docs/shots/ground.png) |
+| ![City lights on the night side](docs/shots/night-lights.png) | ![Ground level](docs/shots/ground.png) |
+| ![Territory and borders](docs/shots/empire.png) | ![Setting priorities](docs/shots/priorities.png) |
 
 ## Stack
 

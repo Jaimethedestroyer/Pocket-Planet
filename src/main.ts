@@ -1,4 +1,5 @@
 import { PocketPlanetApp } from './app';
+import { Hud } from './ui/hud';
 import type { ViewState } from './app';
 import type { QualityTier } from './planet/config';
 
@@ -17,7 +18,19 @@ const pixelError = params.has('lod') ? Number(params.get('lod')) : undefined;
 
 const bloom = params.has('bloom') ? Number(params.get('bloom')) : undefined;
 
-const app = new PocketPlanetApp({ canvas, seed, quality, renderScale, pixelError, bloom });
+const cellCount = params.has('cells') ? Number(params.get('cells')) : undefined;
+const speed = params.has('speed') ? Number(params.get('speed')) : undefined;
+
+const app = new PocketPlanetApp({
+  canvas,
+  seed,
+  quality,
+  renderScale,
+  pixelError,
+  bloom,
+  cellCount,
+  speed,
+});
 
 // Apply any view supplied on the query string. Handy for sharing a viewpoint
 // and for driving the screenshot tool.
@@ -28,6 +41,16 @@ for (const key of ['lat', 'lon', 'altitude', 'heading', 'sun'] as const) {
 }
 if (params.get('autorotate') === '0') view.autoRotate = false;
 if (Object.keys(view).length > 0) app.setView(view);
+
+// --- Game interface --------------------------------------------------------
+
+const gameHud = new Hud(app.sim);
+document.body.appendChild(gameHud.root);
+const previousOnState = app.sim.onState;
+app.sim.onState = () => {
+  previousOnState?.();
+  gameHud.update();
+};
 
 app.start();
 
@@ -113,6 +136,8 @@ declare global {
       isSettled(): boolean;
       stats(): Record<string, number>;
       skipBoot(): void;
+      runYears(years: number): void;
+      setSpeed(yearsPerSecond: number): void;
     };
   }
 }
@@ -129,4 +154,6 @@ window.pocketPlanet = {
     booted = true;
     boot.setAttribute('hidden', '');
   },
+  runYears: (years) => app.sim.catchUp(years),
+  setSpeed: (yearsPerSecond) => app.sim.setSpeed(yearsPerSecond),
 };

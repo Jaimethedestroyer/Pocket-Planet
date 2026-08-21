@@ -41,6 +41,14 @@ const SHOTS = [
   { name: 'mountains', lat: -14, lon: 200, altitude: 110, heading: 130, sunOffset: -55 },
   { name: 'ground', lat: 22, lon: 44, altitude: 6, heading: 90, sunOffset: -62 },
   { name: 'dusk', lat: 30, lon: 60, altitude: 40, heading: 250, sunOffset: -86 },
+  // History shots: `years` advances the simulation before capturing, so these
+  // show territory and settlements rather than an empty planet.
+  { name: 'civilization', lat: 18, lon: 40, altitude: 1400, heading: 0, sunOffset: -25, years: 900 },
+  { name: 'empire', lat: 18, lon: 40, altitude: 2600, heading: 0, sunOffset: -25, years: 1100 },
+  { name: 'night-lights', lat: 18, lon: 40, altitude: 1500, heading: 0, sunOffset: -150, years: 0 },
+  // Interface shots. `panel` opens the priorities panel before capturing.
+  { name: 'interface', lat: 18, lon: 40, altitude: 1800, heading: 0, sunOffset: -30, years: 300 },
+  { name: 'priorities', lat: 18, lon: 40, altitude: 1800, heading: 0, sunOffset: -30, panel: true },
 ].map((s) => ({ ...s, sun: s.lon + s.sunOffset }));
 
 const wanted = process.argv.slice(2);
@@ -130,9 +138,29 @@ async function settle(timeoutMs = 180000) {
 console.log('capturing...');
 await page.evaluate('window.pocketPlanet.skipBoot()');
 
+// Simulation speed is driven explicitly by the shots, not by wall clock.
+await page.evaluate('window.pocketPlanet.setSpeed(0)');
+
+let simulatedYears = 0;
 for (const shot of shots) {
-  const { name, ...view } = shot;
+  const { name, years, sunOffset, panel, ...view } = shot;
+  void sunOffset;
+  if (years) {
+    // Advance in bounded chunks: the worker caps a single catch-up so that a
+    // long absence cannot block it for seconds on end.
+    for (let remaining = years; remaining > 0; remaining -= 500) {
+      await page.evaluate((n) => window.pocketPlanet.runYears(n), Math.min(500, remaining));
+      await page.waitForTimeout(150);
+    }
+    simulatedYears += years;
+  }
   await page.evaluate((v) => window.pocketPlanet.setView(v), { ...view, autoRotate: false });
+  if (panel) {
+    await page.evaluate(() => {
+      const toggle = document.getElementById('pp-policy-toggle');
+      if (toggle && document.getElementById('pp-policies')?.hasAttribute('hidden')) toggle.click();
+    });
+  }
   const ok = await settle();
   await page.waitForTimeout(500);
   const stats = await page.evaluate('window.pocketPlanet.stats()');
@@ -142,10 +170,13 @@ for (const shot of shots) {
       `patches ${String(stats.visiblePatches).padStart(4)}  ` +
       `tris ${String(Math.round(stats.triangles / 1000)).padStart(4)}k  ` +
       `lod ${stats.deepestLevel}  ` +
-      `draws ${stats.drawCalls}`,
+      `draws ${String(stats.drawCalls).padStart(3)}  ` +
+      `year ${String(stats.year).padStart(4)}  ` +
+      `states ${stats.states}  ` +
+      `towns ${stats.settlements}`,
   );
 }
 
 await browser.close();
 server.kill('SIGTERM');
-console.log(`\nwrote ${shots.length} shots to ${OUT}/`);
+console.log(`\nwrote ${shots.length} shots to ${OUT}/ (${simulatedYears} years simulated)`);

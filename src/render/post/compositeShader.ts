@@ -278,7 +278,7 @@ void main() {
     // Sun glint.
     vec3 H = normalize(uSunDir - dir);
     float spec = pow(max(dot(N, H), 0.0), 400.0);
-    water += uSunColor * uSunIntensity * spec * 0.7 * step(0.0, dot(up, uSunDir));
+    water += uSunColor * uSunIntensity * spec * 0.35 * step(0.0, dot(up, uSunDir));
 
     // Shoreline foam, only where the sea floor is nearly at the surface.
     // Foam only right at the waterline. Widening this at all turns the whole

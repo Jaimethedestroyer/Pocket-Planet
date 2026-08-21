@@ -11,11 +11,17 @@ import { Environment } from './render/environment';
 import { CameraRig } from './render/cameraRig';
 import { createTerrainMaterial, updateTerrainDetail } from './render/materials/terrain';
 import { RenderPipeline } from './render/post/pipeline';
+import { SettlementLayer } from './render/settlements';
+import { SimClient } from './game/simClient';
 import { hashSeed } from './core/rng';
 
 export interface AppOptions {
   canvas: HTMLCanvasElement;
   seed?: string;
+  /** Simulation cells. Never drawn; see src/sim/world.ts. */
+  cellCount?: number;
+  /** Years of history per real second. */
+  speed?: number;
   quality?: QualityTier;
   /** Extra multiplier on the internal render resolution. */
   renderScale?: number;
@@ -48,6 +54,8 @@ export class PocketPlanetApp {
   readonly rig: CameraRig;
   readonly terrain: TerrainSystem;
   readonly pipeline: RenderPipeline;
+  readonly sim: SimClient;
+  readonly settlements: SettlementLayer;
 
   readonly seed: number;
   private quality = QUALITY.high;
@@ -119,6 +127,24 @@ export class PocketPlanetApp {
 
     if (opts.bloom !== undefined) this.pipeline.setBloom(opts.bloom);
 
+    // The simulation runs in its own worker on its own clock, so history
+    // advances at the same rate whether the renderer is managing 60 fps or 20.
+    this.sim = new SimClient(this.seed, opts.cellCount ?? 4096);
+    this.terrainMaterial.uniforms.tTerritory.value = this.sim.territoryTexture;
+
+    this.settlements = new SettlementLayer(this.environment.uniforms);
+    this.scene.add(this.settlements.mesh);
+
+    this.sim.onReady = () => {
+      if (this.sim.cellPositions && this.sim.cellHeights) {
+        this.settlements.setCellData(this.sim.cellPositions, this.sim.cellHeights);
+      }
+      this.sim.setSpeed(opts.speed ?? 4);
+    };
+    this.sim.onState = () => {
+      this.settlements.update(this.sim.settlements, this.sim.polityHues());
+    };
+
     this.detachInput = this.rig.attach(opts.canvas);
     window.addEventListener('resize', this.onResize);
     this.onResize();
@@ -174,6 +200,7 @@ export class PocketPlanetApp {
 
     this.camera.updateMatrixWorld();
     this.terrain.update(this.camera.position, this.projScale());
+    this.settlements.setProjScale(this.projScale());
 
     this.pipeline.camAltitude = this.rig.altitude;
     this.pipeline.render(this.scene, this.camera);
@@ -197,6 +224,10 @@ export class PocketPlanetApp {
       pending: t.pending,
       queued: t.queued,
       drawCalls: this.renderer.info.render.calls,
+      year: this.sim.tick,
+      population: this.sim.totalPopulation,
+      states: this.sim.livingPolities,
+      settlements: this.sim.settlements.length,
     };
   }
 
@@ -238,6 +269,8 @@ export class PocketPlanetApp {
     this.detachInput();
     window.removeEventListener('resize', this.onResize);
     this.terrain.dispose();
+    this.settlements.dispose();
+    this.sim.dispose();
     this.pipeline.dispose();
     this.terrainMaterial.dispose();
     this.renderer.dispose();

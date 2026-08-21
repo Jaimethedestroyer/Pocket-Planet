@@ -124,3 +124,266 @@ body {
 .hud-row b {
   font-weight: 500;
 }
+
+/* --- Game interface ------------------------------------------------------ */
+
+#hud-game {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  /* The planet keeps the whole screen; only the controls take input. */
+  pointer-events: none;
+  font-size: 13px;
+}
+
+#hud-game button,
+#hud-game .pp-policies,
+#hud-game .pp-track {
+  pointer-events: auto;
+}
+
+.pp-top {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 14px);
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.pp-year {
+  text-align: center;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.85);
+}
+
+.pp-year b {
+  display: block;
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+
+.pp-year span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 0.05em;
+}
+
+/* --- Chronicle feed ------------------------------------------------------ */
+
+.pp-feed {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 3px;
+  max-height: 42vh;
+  overflow: hidden;
+  /* Older lines fade out at the top rather than being cut off. */
+  mask-image: linear-gradient(to bottom, transparent, black 34%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 34%);
+}
+
+.pp-line {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #c3cddc;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.95);
+  animation: pp-in 480ms ease both;
+}
+
+.pp-line span {
+  display: inline-block;
+  min-width: 44px;
+  color: #6f7d90;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-line.major {
+  color: #f0e3c4;
+}
+
+@keyframes pp-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+/* --- Bottom dock --------------------------------------------------------- */
+
+.pp-dock {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pp-btn {
+  appearance: none;
+  border: 1px solid var(--edge);
+  background: var(--panel);
+  backdrop-filter: blur(16px);
+  color: var(--ink);
+  border-radius: 11px;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.pp-btn:hover {
+  border-color: rgba(160, 195, 240, 0.4);
+}
+
+.pp-policy-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 13px 8px 10px;
+  min-width: 0;
+  text-align: left;
+}
+
+.pp-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.25);
+}
+
+.pp-state {
+  display: block;
+  min-width: 0;
+}
+
+.pp-state b {
+  display: block;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 46vw;
+}
+
+.pp-state i {
+  display: block;
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--dim);
+  margin-top: 1px;
+}
+
+.pp-speeds {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.pp-speed {
+  width: 40px;
+  height: 40px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+
+.pp-speed.on {
+  color: #eaf1fb;
+  border-color: rgba(150, 200, 255, 0.55);
+  background: rgba(50, 90, 145, 0.45);
+}
+
+/* --- Priorities panel ---------------------------------------------------- */
+
+.pp-policies {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 68px);
+  max-width: 430px;
+  margin: 0 auto;
+  padding: 15px 16px 8px;
+  background: rgba(7, 11, 19, 0.86);
+  border: 1px solid var(--edge);
+  border-radius: 15px;
+  backdrop-filter: blur(20px);
+  max-height: 62vh;
+  overflow-y: auto;
+  animation: pp-in 220ms ease both;
+}
+
+.pp-policies-head {
+  margin-bottom: 13px;
+}
+
+.pp-policies-head b {
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+.pp-policies-head span {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--dim);
+  line-height: 1.5;
+}
+
+.pp-policy {
+  margin-bottom: 13px;
+}
+
+.pp-policy-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 5px;
+}
+
+.pp-policy-head b {
+  font-weight: 500;
+  font-size: 12.5px;
+}
+
+.pp-policy-value {
+  font-size: 11px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-track {
+  position: relative;
+  height: 22px;
+  border-radius: 6px;
+  background: rgba(150, 180, 220, 0.1);
+  overflow: hidden;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.pp-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, #3d6fb8, #79b6e8);
+  transition: width 180ms ease;
+}
+
+.pp-hint {
+  display: block;
+  margin-top: 4px;
+  font-style: normal;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: #6f7d90;
+}

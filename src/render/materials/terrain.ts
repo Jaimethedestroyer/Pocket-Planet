@@ -42,6 +42,8 @@ uniform vec3 uAmbientColor;
 uniform float uPlanetRadius;
 uniform float uDetailStrength;
 uniform float uProjScale;
+uniform sampler2D tTerritory;
+uniform float uTerritoryStrength;
 uniform float uMaxElevation;
 
 varying vec3 vWorldPos;
@@ -174,6 +176,35 @@ void main() {
     N = normalize(N + bump * 0.22 * detail);
   }
 
+  // --- Territory ----------------------------------------------------------
+  // Sampled as a painted field in equirectangular space, never as cells. Where
+  // two polities meet, their colour fields blend, so a border is a curve the
+  // shader discovers rather than an edge the simulation drew.
+  if (uTerritoryStrength > 0.001 && height > -1.0) {
+    float lat = asin(clamp(up.y, -1.0, 1.0));
+    float lon = atan(up.z, up.x);
+    vec2 tuv = vec2(lon * 0.1591549 + 0.5, 0.5 - lat * 0.3183099);
+    vec4 claim = texture2D(tTerritory, tuv);
+    float cover = claim.a * uTerritoryStrength;
+    if (cover > 0.003) {
+      // Tint rather than replace: the land underneath still has to read as
+      // desert or forest, because that is why the border is where it is.
+      vec3 tinted = mix(albedo, claim.rgb, 0.7) * (0.85 + 0.25 * dot(claim.rgb, vec3(0.33)));
+      albedo = mix(albedo, tinted, cover);
+
+      // Borders, found rather than drawn: wherever the painted colour field
+      // changes quickly, two states meet. Four extra taps, no geometry, and it
+      // follows the coastline and the terrain for free.
+      vec2 texel = vec2(1.0 / 512.0, 1.0 / 256.0) * 1.25;
+      vec4 cx = texture2D(tTerritory, tuv + vec2(texel.x, 0.0));
+      vec4 cy = texture2D(tTerritory, tuv + vec2(0.0, texel.y));
+      float delta = length(claim.rgb - cx.rgb) + length(claim.rgb - cy.rgb)
+                  + abs(claim.a - cx.a) + abs(claim.a - cy.a);
+      float edge = smoothstep(0.08, 0.42, delta) * min(1.0, cover * 1.6);
+      albedo = mix(albedo, albedo * 0.32 + claim.rgb * 0.34, edge);
+    }
+  }
+
   // --- Lighting -----------------------------------------------------------
   float ndl = dot(N, uSunDir);
   // A wrapped diffuse term softens the terminator, which otherwise cuts a hard
@@ -213,6 +244,8 @@ export function createTerrainMaterial(shared: SharedUniforms): THREE.ShaderMater
       uPlanetRadius: shared.uPlanetRadius,
       uDetailStrength: { value: 0 },
       uProjScale: { value: 1000 },
+      tTerritory: { value: null },
+      uTerritoryStrength: { value: 1.0 },
       uMaxElevation: { value: MAX_ELEVATION },
     },
     side: THREE.FrontSide,
@@ -233,4 +266,10 @@ export function updateTerrainDetail(
   // enough for it to matter.
   material.uniforms.uDetailStrength.value = altitude > 4000 ? 0 : 1;
   material.uniforms.uProjScale.value = projScale;
+
+  // The political overlay strengthens with altitude. From orbit the planet is
+  // being read as a map and borders are the point; standing in a field it
+  // would only be a coloured film over ground the player came down to look at.
+  const t = THREE.MathUtils.smoothstep(altitude, 120, 2200);
+  material.uniforms.uTerritoryStrength.value = 0.4 + t * 0.85;
 }

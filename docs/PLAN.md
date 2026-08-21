@@ -290,11 +290,12 @@ Adding anything from the right column means cutting something from the left.
 | M2 Rendering: ocean, atmosphere, bloom, golden hour | **done** |
 | M3 Camera: orbit-to-ground, touch and mouse input | **done** |
 | M4 Visual regression harness | **done** |
-| M5 Simulation core and soak harness | next |
-| M6 Settlements, territory, night lights | |
-| M7 Chronicle, timeline, offline catch-up | |
-| M8 Ground detail: buildings, billboard citizens | |
-| M9 Capacitor wrap, Play Store internal test | |
+| M5 Simulation core and soak harness | **done** |
+| M6 Settlements, territory, night lights | **done** |
+| M7 Interface: priorities, chronicle feed, time controls | **done** |
+| M8 Save/load and offline catch-up | next |
+| M9 Ground detail: buildings, billboard citizens | |
+| M10 Capacitor wrap, Play Store internal test | |
 
 ---
 

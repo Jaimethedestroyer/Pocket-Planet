@@ -845,6 +845,20 @@ export class Simulation {
         this.population[c] *= 0.25;
         this.cellFlags[c] |= CellFlag.Ruins;
       }
+      // Nothing survives this one, so the player continues with whichever
+      // civilization is now the largest on the planet.
+      if (this.playerPolity === polity.id) {
+        let heir = -1;
+        let best = -1;
+        for (const p of this.polities) {
+          if (p.alive && p.id !== polity.id && p.population > best) {
+            best = p.population;
+            heir = p.id;
+          }
+        }
+        if (heir >= 0) this.playerPolity = heir;
+      }
+
       this.emit({
         tick: this.tick,
         kind: 'collapse',
@@ -921,6 +935,14 @@ export class Simulation {
       for (const b of successors) {
         if (a.id !== b.id) a.legitimacy = 0.35;
       }
+    }
+
+    // If the player's civilization is the one that fell, they carry on with its
+    // strongest heir. Collapse is a turn in the story, not an ending.
+    if (this.playerPolity === polity.id) {
+      let heir = successors[0];
+      for (const s of successors) if (s.cellCount > heir.cellCount) heir = s;
+      this.playerPolity = heir.id;
     }
 
     this.emit({
