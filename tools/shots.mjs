@@ -21,6 +21,7 @@ const SEED = 'pocket-planet';
 // Optional overrides for experiments: LOD=1.5 npm run shot -- coast
 const LOD = process.env.LOD ? `&lod=${process.env.LOD}` : '';
 const BLOOM = process.env.BLOOM !== undefined ? `&bloom=${process.env.BLOOM}` : '';
+const CLOUDS = process.env.CLOUDS !== undefined ? `&clouds=${process.env.CLOUDS}` : '';
 const SCALE = process.env.SCALE ?? '1';
 
 /**
@@ -115,7 +116,7 @@ page.on('console', (m) => {
 });
 page.on('pageerror', (e) => console.log(`  [page error] ${e.message}`));
 
-await page.goto(`http://localhost:${PORT}/?seed=${SEED}&hud=1&autorotate=0&scale=${SCALE}${LOD}${BLOOM}`, {
+await page.goto(`http://localhost:${PORT}/?seed=${SEED}&hud=1&autorotate=0&scale=${SCALE}${LOD}${BLOOM}${CLOUDS}`, {
   waitUntil: 'load',
 });
 await page.waitForFunction('window.pocketPlanet !== undefined', null, { timeout: 30000 });

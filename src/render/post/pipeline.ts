@@ -161,6 +161,8 @@ export class RenderPipeline {
       defines: {
         PRIMARY_STEPS: quality.atmosphereSteps,
         LIGHT_STEPS: quality.atmosphereLightSteps,
+        CLOUD_STEPS: quality.cloudSteps,
+        CLOUD_LIGHT_STEPS: quality.cloudLightSteps,
       },
       uniforms: {
         tScene: { value: null },
@@ -191,6 +193,13 @@ export class RenderPipeline {
         uAtmosphereStrength: { value: 3.4 },
         uProjScale: { value: 1000 },
         uTanHalfFov: { value: 0.5 },
+        // Above the mountains, which top out at 26 m. Set lower, the deck
+        // intersects the terrain and reads as fog caught on a hillside rather
+        // than as weather overhead.
+        uCloudBottom: { value: 34 },
+        uCloudTop: { value: 66 },
+        uCloudCoverage: { value: 0.46 },
+        uCloudDensity: { value: quality.clouds ? 1.0 : 0.0 },
       },
       depthTest: false,
       depthWrite: false,
@@ -349,6 +358,11 @@ export class RenderPipeline {
 
   setBloom(strength: number): void {
     this.finalMaterial.uniforms.uBloomStrength.value = strength;
+  }
+
+  /** 0 is a clear sky, 1 is overcast. */
+  setCloudCoverage(value: number): void {
+    this.compositeMaterial.uniforms.uCloudCoverage.value = value;
   }
 
   /** Tuning knobs, exposed for the in-app debug panel. */

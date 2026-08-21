@@ -29,6 +29,8 @@ export interface AppOptions {
   pixelError?: number;
   /** Override bloom strength. Zero disables it. */
   bloom?: number;
+  /** Cloud coverage, 0 clear to 1 overcast. */
+  clouds?: number;
 }
 
 export interface ViewState {
@@ -126,6 +128,7 @@ export class PocketPlanetApp {
     );
 
     if (opts.bloom !== undefined) this.pipeline.setBloom(opts.bloom);
+    if (opts.clouds !== undefined) this.pipeline.setCloudCoverage(opts.clouds);
 
     // The simulation runs in its own worker on its own clock, so history
     // advances at the same rate whether the renderer is managing 60 fps or 20.

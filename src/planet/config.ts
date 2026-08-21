@@ -73,6 +73,10 @@ export interface QualitySettings {
   atmosphereLightSteps: number;
   bloom: boolean;
   clouds: boolean;
+  /** Raymarch steps through the cloud deck. */
+  cloudSteps: number;
+  /** Steps towards the sun per cloud sample, for self-shadowing. */
+  cloudLightSteps: number;
   /** Render scale multiplier applied to the device pixel ratio. */
   renderScale: number;
   maxPixelRatio: number;
@@ -89,6 +93,8 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     atmosphereLightSteps: 3,
     bloom: false,
     clouds: true,
+    cloudSteps: 7,
+    cloudLightSteps: 2,
     renderScale: 0.85,
     maxPixelRatio: 1.5,
   },
@@ -102,6 +108,8 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     atmosphereLightSteps: 4,
     bloom: true,
     clouds: true,
+    cloudSteps: 11,
+    cloudLightSteps: 3,
     renderScale: 1,
     maxPixelRatio: 2,
   },
@@ -115,6 +123,8 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     atmosphereLightSteps: 6,
     bloom: true,
     clouds: true,
+    cloudSteps: 16,
+    cloudLightSteps: 4,
     renderScale: 1,
     maxPixelRatio: 2,
   },

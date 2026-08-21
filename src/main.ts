@@ -19,6 +19,7 @@ const renderScale = params.has('scale') ? Number(params.get('scale')) : undefine
 const pixelError = params.has('lod') ? Number(params.get('lod')) : undefined;
 
 const bloom = params.has('bloom') ? Number(params.get('bloom')) : undefined;
+const clouds = params.has('clouds') ? Number(params.get('clouds')) : undefined;
 
 const cellCount = params.has('cells') ? Number(params.get('cells')) : undefined;
 const speed = params.has('speed') ? Number(params.get('speed')) : undefined;
@@ -30,6 +31,7 @@ const app = new PocketPlanetApp({
   renderScale,
   pixelError,
   bloom,
+  clouds,
   cellCount,
   speed,
 });

@@ -52,6 +52,11 @@ uniform float uAtmosphereStrength;
 uniform float uProjScale;
 uniform float uTanHalfFov;
 
+uniform float uCloudBottom;
+uniform float uCloudTop;
+uniform float uCloudCoverage;
+uniform float uCloudDensity;
+
 varying vec2 vUv;
 
 ${GLSL_NOISE}
@@ -66,6 +71,12 @@ const float PI = 3.141592653589793;
 #endif
 #ifndef LIGHT_STEPS
 #define LIGHT_STEPS 5
+#endif
+#ifndef CLOUD_STEPS
+#define CLOUD_STEPS 14
+#endif
+#ifndef CLOUD_LIGHT_STEPS
+#define CLOUD_LIGHT_STEPS 3
 #endif
 
 /** Convert a non-linear depth sample to a positive view-space distance. */
@@ -298,6 +309,193 @@ float shoreSurge(vec3 pos) {
   float phase = vnoise(pos * 0.012) * 6.2831853;
   return 0.5 + 0.5 * sin(uTime * 0.55 + phase);
 }
+
+/* ----------------------------------------------------------------- clouds */
+
+/*
+ * Volumetric clouds, raymarched through a shell above the surface.
+ *
+ * Split deliberately into a cheap coverage field and an expensive detail
+ * field. Coverage is a function of direction alone — two noise samples — and
+ * decides whether there is any cloud along this part of the sky at all. Only
+ * where it says yes does the march pay for the three-dimensional detail that
+ * gives a cloud its shape. Over open sky a ray costs almost nothing, which is
+ * what makes a volumetric layer affordable on a phone at all.
+ */
+
+/**
+ * Where cloud banks are, as a function of direction. Drifts with the wind.
+ *
+ * The frequencies are set from how big a weather system should be on the
+ * ground, not from convenient-looking numbers. A unit direction spans two units
+ * across the whole planet, so a frequency of 2 puts about five noise cells on
+ * the entire world — which is exactly what the first version did, and it
+ * produced one continent-sized blob rather than weather. At a radius of a
+ * thousand metres these give banks of roughly 120 m, 50 m and 22 m.
+ */
+float cloudCoverage(vec3 dir, float detail) {
+  vec3 wind = vec3(0.0, uTime * 0.006, uTime * 0.013);
+  float broad = vnoise(dir * 8.5 + wind);
+  float banks = vnoise(dir * 19.0 - wind * 1.7);
+  float c = broad * 0.62 + banks * 0.38;
+  if (detail > 0.01) {
+    c = mix(c, c * 0.82 + vnoise(dir * 44.0 + wind * 2.6) * 0.18, detail);
+  }
+  // Value noise clusters around its midpoint, so the threshold has to be sharp
+  // or half the sky ends up under thin cloud and the planet reads as
+  // permanently overcast.
+  return clamp((c - (1.0 - uCloudCoverage)) * 3.6, 0.0, 1.0);
+}
+
+/**
+ * Cloud density at a point inside the shell.
+ *
+ * The detail argument is how much fine structure survives at the current pixel
+ * footprint, on exactly the same principle as the wave stack: cloud features
+ * are tens of metres across, and asking for them when a pixel covers hundreds
+ * gives grey static rather than weather. It also happens to be what you see
+ * from space — cloud systems, not individual puffs.
+ */
+float cloudDensity(vec3 p, float coverage, float detail) {
+  if (coverage <= 0.001) return 0.0;
+
+  float h = length(p) - uPlanetRadius;
+  // Vertical profile: flat-bottomed, billowing towards the top, thinning out
+  // before the ceiling. This is most of what separates a cloud from fog.
+  float t = clamp((h - uCloudBottom) / max(uCloudTop - uCloudBottom, 0.001), 0.0, 1.0);
+  float profile = smoothstep(0.0, 0.16, t) * (1.0 - smoothstep(0.5, 1.0, t));
+  if (profile <= 0.001) return 0.0;
+
+  // Feature sizes in metres, on a planet with a one-kilometre radius: banks
+  // about eighty metres across, broken up at around twenty-five.
+  vec3 drift = vec3(uTime * 0.06, 0.0, uTime * 0.13);
+  float shape = vnoise(p * 0.012 + drift * 0.012);
+  float fine = detail > 0.01 ? vnoise(p * 0.041 - drift * 0.02) : 0.5;
+  float erosion = mix(shape, shape * 0.62 + fine * 0.38, detail);
+
+  // Erode the cloud from its edges inward, which is what makes cauliflower
+  // rather than a smooth blob.
+  float d = coverage * profile * 1.15 - erosion * 0.5;
+  return clamp(d, 0.0, 1.0) * uCloudDensity;
+}
+
+/** Henyey-Greenstein, strongly forward-scattering: the silver lining. */
+float cloudPhase(float mu) {
+  const float g = 0.42;
+  float g2 = g * g;
+  return (1.0 - g2) / (4.0 * PI * pow(1.0 + g2 - 2.0 * g * mu, 1.5));
+}
+
+/**
+ * March the cloud shell, returning the light it scatters towards the camera
+ * and the transmittance it leaves behind.
+ */
+void marchClouds(
+  vec3 origin,
+  vec3 dir,
+  float maxDist,
+  out vec3 scattered,
+  out float transmittance
+) {
+  scattered = vec3(0.0);
+  transmittance = 1.0;
+
+  float rBottom = uPlanetRadius + uCloudBottom;
+  float rTop = uPlanetRadius + uCloudTop;
+
+  vec2 outer = raySphere(origin, dir, rTop);
+  if (outer.y <= 0.0) return;
+
+  float tMin = max(outer.x, 0.0);
+  float tMax = min(outer.y, maxDist);
+
+  // From outside the shell looking down, the far wall is the inner sphere.
+  vec2 inner = raySphere(origin, dir, rBottom);
+  if (inner.x > 0.0) tMax = min(tMax, inner.x);
+  // From below the deck, the near wall is where the ray leaves the inner sphere.
+  else if (inner.y > 0.0) tMin = max(tMin, inner.y);
+
+  if (tMax <= tMin) return;
+
+  // How much fine structure a pixel can resolve out here. Twenty-five metre
+  // features need several pixels each to read as anything but noise.
+  float footprint = (tMin + tMax) * 0.5 / uProjScale;
+  float detail = 1.0 - smoothstep(2.0, 9.0, footprint);
+
+  float coverage = cloudCoverage(normalize(origin + dir * (tMin + tMax) * 0.5), detail);
+  if (coverage <= 0.001) return;
+
+  // Looking along the deck rather than through it, the path inside the shell
+  // can be hundreds of metres. Marching all of it with a fixed step count
+  // makes each step enormous, and the result is the stack of flat slabs a
+  // raymarch always produces when it is undersampled.
+  tMax = min(tMax, tMin + 380.0);
+
+  float ds = (tMax - tMin) / float(CLOUD_STEPS);
+
+  // Offset each ray's start by a per-pixel fraction of a step. This does not
+  // add samples; it turns the banding into noise, which the eye reads as cloud
+  // texture instead of as rings. A fixed hash rather than a time-varying one,
+  // because with no temporal accumulation an animated jitter just crawls.
+  float jitter = hash31(vec3(gl_FragCoord.xy, 17.0));
+  vec3 p = origin + dir * (tMin + ds * jitter);
+  float phase = cloudPhase(dot(dir, uSunDir));
+
+  for (int i = 0; i < CLOUD_STEPS; i++) {
+    // Coverage varies with direction, and the deck is eighteen metres thick on
+    // a thousand-metre planet, so it is sampled once per primary step and
+    // reused by that sample's march towards the sun. Sampling it again per
+    // light step quadrupled the cost of the pass for no visible difference.
+    float localCoverage = cloudCoverage(normalize(p), detail);
+    float d = cloudDensity(p, localCoverage, detail);
+    if (d > 0.002) {
+      // How much sunlight reaches this sample, by marching towards the sun.
+      float lightDepth = 0.0;
+      float ls = (uCloudTop - uCloudBottom) / float(CLOUD_LIGHT_STEPS);
+      vec3 lp = p + uSunDir * ls * 0.5;
+      for (int j = 0; j < CLOUD_LIGHT_STEPS; j++) {
+        lightDepth += cloudDensity(lp, localCoverage, detail) * ls;
+        lp += uSunDir * ls;
+      }
+      // Beer's law towards the sun, with a floor: the shaded side of a cloud
+      // is grey rather than black, because real clouds are lit from every
+      // direction by the sky and by each other.
+      float sunlight = exp(-lightDepth * 1.1);
+      sunlight = 0.16 + 0.84 * sunlight;
+      // Only the day side is lit at all.
+      float daylight = clamp(dot(normalize(p), uSunDir) * 3.0 + 0.35, 0.0, 1.0);
+
+      float extinction = exp(-d * ds);
+      vec3 lit = uSunColor * uSunIntensity * sunlight * daylight
+               * (0.55 + phase * 6.0) * 1.5;
+      // Energy-conserving front-to-back accumulation.
+      scattered += transmittance * (1.0 - extinction) * lit;
+      transmittance *= extinction;
+      if (transmittance < 0.012) break;
+    }
+    p += dir * ds;
+  }
+}
+
+/**
+ * Cloud shadow on the ground.
+ *
+ * One coverage sample, taken where the sun ray leaving this point crosses the
+ * middle of the cloud deck. A full march would be honest and ten times the
+ * cost, and at this scale nobody can tell the difference between a real shadow
+ * and a correctly placed one.
+ */
+float cloudShadow(vec3 surface) {
+  float mid = uPlanetRadius + (uCloudBottom + uCloudTop) * 0.5;
+  vec2 hit = raySphere(surface, uSunDir, mid);
+  if (hit.y <= 0.0) return 0.0;
+  vec3 p = surface + uSunDir * hit.y;
+  // Softened: the coverage field is deliberately hard-edged so that clouds
+  // have crisp silhouettes, but a shadow with the same edge reads as a hole
+  // punched in the ground rather than as an overcast patch.
+  return smoothstep(0.0, 0.75, cloudCoverage(normalize(p), 0.0));
+}
+
 void main() {
   // Reconstruct the world-space view ray for this pixel.
   vec4 far = uInvProjView * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
@@ -398,6 +596,27 @@ void main() {
 
     color = water;
     occluderDist = sea.x;
+  }
+
+  /* --- Cloud shadows ---------------------------------------------------- */
+  if (hitScene || occluderDist < 1e8) {
+    vec3 ground = uCameraPos + dir * occluderDist;
+    float shadow = cloudShadow(ground) * 0.3;
+    color *= 1.0 - shadow;
+  }
+
+  /* --- Clouds ----------------------------------------------------------- */
+  {
+    vec3 cloudLight;
+    float cloudTransmittance;
+    marchClouds(uCameraPos, dir, occluderDist, cloudLight, cloudTransmittance);
+    color = color * cloudTransmittance + cloudLight;
+    // Anything behind a cloud is no longer the nearest thing along this ray,
+    // so the atmosphere below it must not be integrated as if it were.
+    if (cloudTransmittance < 0.5) {
+      vec2 deck = raySphere(uCameraPos, dir, uPlanetRadius + uCloudTop);
+      if (deck.x > 0.0) occluderDist = min(occluderDist, deck.x);
+    }
   }
 
   /* --- Atmosphere ------------------------------------------------------- */
