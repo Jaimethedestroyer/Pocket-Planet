@@ -1,0 +1,151 @@
+/**
+ * Headless screenshot harness.
+ *
+ * Builds the app, serves it, then drives the camera through a fixed set of
+ * viewpoints and captures each once the LOD system reports it has nothing left
+ * to build. Deterministic seed and a frozen sun mean two runs are comparable,
+ * which is what makes this useful for spotting visual regressions rather than
+ * just producing pretty pictures.
+ *
+ *   npm run shot            all shots
+ *   npm run shot -- orbit   just the named ones
+ */
+
+import { spawn } from 'node:child_process';
+import { mkdir, rm } from 'node:fs/promises';
+import { chromium } from 'playwright';
+
+const PORT = 4183;
+const OUT = 'docs/shots';
+const SEED = 'pocket-planet';
+// Optional overrides for experiments: LOD=1.5 npm run shot -- coast
+const LOD = process.env.LOD ? `&lod=${process.env.LOD}` : '';
+const BLOOM = process.env.BLOOM !== undefined ? `&bloom=${process.env.BLOOM}` : '';
+const SCALE = process.env.SCALE ?? '1';
+
+/**
+ * Viewpoints. Altitude is metres above the terrain; the planet radius is 1000.
+ *
+ * `sunOffset` is degrees of sun angle relative to the viewpoint's own
+ * longitude, because the sun tracks longitude: 0 puts it overhead, -75 gives a
+ * low morning light, and past about -90 the viewpoint is in night. Specifying
+ * an absolute sun angle instead is how the first version of this file ended up
+ * shooting a "mountains at dawn" frame on the far side of the planet at
+ * midnight.
+ */
+const SHOTS = [
+  { name: 'orbit', lat: 18, lon: 40, altitude: 2600, heading: 0, sunOffset: -20 },
+  { name: 'orbit-terminator', lat: 5, lon: 128, altitude: 2100, heading: 0, sunOffset: -78 },
+  { name: 'continent', lat: 22, lon: 44, altitude: 620, heading: 0, sunOffset: -30 },
+  { name: 'coast', lat: 30, lon: 60, altitude: 150, heading: 60, sunOffset: -40 },
+  { name: 'mountains', lat: -14, lon: 200, altitude: 110, heading: 130, sunOffset: -55 },
+  { name: 'ground', lat: 22, lon: 44, altitude: 6, heading: 90, sunOffset: -62 },
+  { name: 'dusk', lat: 30, lon: 60, altitude: 40, heading: 250, sunOffset: -86 },
+].map((s) => ({ ...s, sun: s.lon + s.sunOffset }));
+
+const wanted = process.argv.slice(2);
+const suffix = process.env.TAG ? `-${process.env.TAG}` : '';
+const shots = wanted.length ? SHOTS.filter((s) => wanted.includes(s.name)) : SHOTS;
+
+async function run(cmd, args) {
+  return new Promise((resolve, reject) => {
+    const p = spawn(cmd, args, { stdio: 'inherit', shell: false });
+    p.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}`))));
+  });
+}
+
+console.log('building...');
+await run('npx', ['vite', 'build', '--logLevel', 'warn']);
+
+await mkdir(OUT, { recursive: true });
+
+const server = spawn(
+  'npx',
+  ['vite', 'preview', '--port', String(PORT), '--strictPort', '--logLevel', 'warn'],
+  { stdio: 'ignore' },
+);
+const shutdown = () => server.kill('SIGTERM');
+process.on('exit', shutdown);
+process.on('SIGINT', () => { shutdown(); process.exit(1); });
+
+// Wait for the preview server to accept connections.
+for (let i = 0; i < 60; i++) {
+  try {
+    const res = await fetch(`http://localhost:${PORT}/`);
+    if (res.ok) break;
+  } catch {
+    /* not up yet */
+  }
+  await new Promise((r) => setTimeout(r, 250));
+}
+
+// The full Chromium build, not headless_shell: swiftshader-backed WebGL2 is
+// only available in the complete browser.
+const browser = await chromium.launch({
+  executablePath: process.env.CHROMIUM_PATH ?? '/opt/pw-browsers/chromium',
+  args: [
+    '--use-gl=angle',
+    '--use-angle=swiftshader',
+    '--enable-unsafe-swiftshader',
+    '--ignore-gpu-blocklist',
+    '--enable-webgl',
+    '--no-sandbox',
+    '--disable-dev-shm-usage',
+  ],
+});
+
+// Always shoot at a 1:1 internal resolution. Rendering smaller and letting the
+// browser upscale looked like a free saving, but it puts visible stair-steps
+// along the planet's limb — the one place in the image with a hard, bright,
+// curved edge — and those are easily mistaken for an LOD bug. Use a smaller
+// viewport instead when software rasterisation needs the help.
+const VW = Number(process.env.VW ?? 1000);
+const VH = Number(process.env.VH ?? 625);
+const page = await browser.newPage({ viewport: { width: VW, height: VH } });
+page.on('console', (m) => {
+  if (m.type() === 'error' || m.type() === 'warning') console.log(`  [page ${m.type()}] ${m.text()}`);
+});
+page.on('pageerror', (e) => console.log(`  [page error] ${e.message}`));
+
+await page.goto(`http://localhost:${PORT}/?seed=${SEED}&hud=1&autorotate=0&scale=${SCALE}${LOD}${BLOOM}`, {
+  waitUntil: 'load',
+});
+await page.waitForFunction('window.pocketPlanet !== undefined', null, { timeout: 30000 });
+
+/** Spin the frame loop until the terrain reports it has nothing queued. */
+async function settle(timeoutMs = 180000) {
+  const start = Date.now();
+  let stableFrames = 0;
+  while (Date.now() - start < timeoutMs) {
+    const settled = await page.evaluate('window.pocketPlanet.isSettled()');
+    stableFrames = settled ? stableFrames + 1 : 0;
+    // Require several consecutive settled polls: a patch arriving can trigger
+    // a fresh round of splits one frame later.
+    if (stableFrames >= 6) return true;
+    await page.waitForTimeout(220);
+  }
+  return false;
+}
+
+console.log('capturing...');
+await page.evaluate('window.pocketPlanet.skipBoot()');
+
+for (const shot of shots) {
+  const { name, ...view } = shot;
+  await page.evaluate((v) => window.pocketPlanet.setView(v), { ...view, autoRotate: false });
+  const ok = await settle();
+  await page.waitForTimeout(500);
+  const stats = await page.evaluate('window.pocketPlanet.stats()');
+  await page.screenshot({ path: `${OUT}/${name}${suffix}.png` });
+  console.log(
+    `  ${name.padEnd(18)} ${ok ? 'settled' : 'TIMEOUT'}  ` +
+      `patches ${String(stats.visiblePatches).padStart(4)}  ` +
+      `tris ${String(Math.round(stats.triangles / 1000)).padStart(4)}k  ` +
+      `lod ${stats.deepestLevel}  ` +
+      `draws ${stats.drawCalls}`,
+  );
+}
+
+await browser.close();
+server.kill('SIGTERM');
+console.log(`\nwrote ${shots.length} shots to ${OUT}/`);

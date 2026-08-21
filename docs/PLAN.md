@@ -1,8 +1,14 @@
 # Pocket Planet — Technical Plan
 
-A persistent 3D civilization simulation for Android. Rotate a living planet, nudge a
+A persistent civilization simulation on a living planet. Rotate a world, nudge a
 civilization's priorities, and come back later to read the history it wrote while you
 were gone.
+
+**Web first.** The game is a browser app, deployed to Vercel, playable on a phone from a
+URL. Capacitor wraps the same build into an Android AAB later, once the game is worth
+installing. That ordering is deliberate: it makes every change testable on a real phone
+in seconds instead of through a native build, and it means there is always something to
+show.
 
 This document is the build contract. The **Out of scope** list is as binding as the
 **In scope** list.
@@ -13,340 +19,243 @@ This document is the build contract. The **Out of scope** list is as binding as 
 
 | Layer | Choice | Why |
 |---|---|---|
-| Shell | **Capacitor 6 → Android AAB** | Real Chrome WebView: full WebGL2, Web Workers, IndexedDB, USB devtools. Native plugins for notifications, storage, billing. One codebase. |
-| Render | **three.js (WebGL2)** | Requested, and comfortably sufficient — the whole planet is ~15k triangles. |
-| Language | **TypeScript**, strict | Sim must be portable between browser, worker, and Node. |
-| HUD/UI | **React + DOM overlay** on the canvas | Text, panels, and lists in DOM. Never build UI inside the 3D scene. |
-| Build | **Vite** | Fast HMR against a device over LAN. |
-| Sim | **Pure TS, zero deps, in a Web Worker** | No DOM, no three.js. Runs identically in Node for the balance harness. |
-| Persistence | **IndexedDB** (snapshots), Capacitor Preferences (settings) | Snapshots are binary ArrayBuffers; IDB handles them natively. |
-| Test | **Vitest** (unit) + headless soak runner (balance) | See §7. |
+| Target | **Web → Vercel**, Capacitor → Android later | Instant deploys, real-device testing from a link, one codebase |
+| Render | **three.js, WebGL2** | The whole planet is a few hundred thousand triangles; this is well within reach |
+| Language | **TypeScript**, strict | The simulation has to run in the browser, in a worker, and in Node for the headless tools |
+| UI | React or plain DOM **over** the canvas | Text and panels belong in DOM. Never build UI inside the 3D scene |
+| Build | **Vite** | Fast HMR against a phone over LAN |
+| Sim | **Pure TS, no dependencies, in a Web Worker** | No DOM, no three.js. Runs identically in Node for the balance harness |
+| Test | **Vitest** + headless soak runner + Playwright screenshots | See §6 and §7 |
 
-### Rejected alternatives
-
-- **React Native + expo-gl** — partial WebGL implementation, fragile three.js compat,
-  awkward Worker story. Capacitor gives a full modern browser engine instead.
-- **Unity / Unreal** — Unreal on mobile solo is a trap (binary size, iteration time).
-  Unity is defensible but discards the three.js requirement for no gain at this scale.
-- **TWA / PWA-only** — no native notifications control, weaker offline story, harder
-  billing.
+**No LLM anywhere in the game.** It was in an earlier draft of this plan and it is out.
+The chronicle is generated from a template grammar: deterministic, instant, free, offline,
+and with no per-player cost. Nothing about the game needs a model at runtime, and a
+contest entry that phones an API to write flavour text is weaker, not stronger.
 
 ### Performance budget
 
-Target: **60 fps on a mid-range 2021 Android device**, 30 fps floor on low-end.
+Target **60 fps on a mid-range Android phone**, 30 fps floor on low-end.
 
-- Full sim tick: **< 4 ms** at 2562 tiles (measured in the soak harness, p99).
-- Draw calls: **< 25** total.
-- Triangles: **< 60k** including sprites and ambient life.
-- Cold start to interactive: **< 3 s** from a snapshot.
-- Catch-up of 2000 ticks: **< 4 s** in the worker, behind a progress bar.
+- Terrain patches visible: **under ~280** (enforced adaptively, see §3)
+- Triangles: **under ~400k**
+- Draw calls: **under ~250**
+- Sim tick: **under 4 ms** at full civilization count
+- Cold start to a visible planet: **under 3 s**
 
 ---
 
-## 2. The planet
+## 2. The planet is continuous, not tiled
 
-### Geometry
+There are no hexes and no visible cells. The terrain is a **pure function of position on
+the unit sphere** — noise, evaluated anywhere, at any detail level. That is what makes it
+possible to zoom continuously from orbit down to a person standing in a field without the
+world ever resolving into a board.
 
-A **Goldberg polyhedron**: the dual of a subdivided icosahedron. Every tile is a hexagon
-except exactly 12 pentagons at the original icosahedron vertices. Tile count is
-`10 · 4ᴺ + 2`:
+### Terrain function
 
-| Subdiv N | Tiles | Use |
-|---|---|---|
-| 3 | 642 | Low-end / fast mode |
-| **4** | **2562** | **Default planet** |
-| 5 | 10242 | Stretch goal only |
+Ordered, all seeded from the world seed:
 
-Built once at world-gen from the seed. We store, per tile: centroid (unit vector), corner
-ring, and a fixed-arity neighbour list (5 or 6).
+1. **Domain warp** — a gentle low-frequency offset of the sample position. This is the
+   cheapest trick that turns blobby noise islands into coastlines with peninsulas, bays
+   and archipelagos. Turned up too far it shears continents into marbled swirls, so it
+   stays gentle.
+2. **Continent field** — a low-frequency, fast-decaying fBm for a handful of large
+   landmasses, plus a small high-frequency term that perturbs only the coastline. Split
+   this way, the continents stay whole while the shore stays interesting.
+3. **Ocean floor** — abyssal plains deepening away from the shelf, with mid-ocean ridges
+   lifting long welts back through them.
+4. **Land base** — a rolling plateau field.
+5. **Mountain belts** — ridged multifractal, gated by a separate low-frequency *orogeny*
+   mask so ranges form in bands across a continent instead of studding it evenly.
+6. **Hills and surface detail** — faded out near the waterline, or fine detail crosses sea
+   level constantly and peppers every coastal plain with sub-metre puddles.
+7. **Climate** — temperature from latitude and a mild lapse rate; moisture from
+   circulation bands, distance inland, and rain shadow.
 
-### Data layout — struct of arrays
+### Band-limiting
 
-**Non-negotiable.** All tile state lives in parallel typed arrays, never in an array of
-objects:
+Every octave fades out once its features approach the vertex spacing of the mesh being
+built, and the loop exits early once nothing coarser remains. Without this, a coarse patch
+samples high-frequency noise at random phase and the terrain visibly boils as LOD levels
+swap. With it, detail fades in smoothly and the silhouette never moves.
 
-```ts
-interface TileArrays {
-  elevation:   Float32Array; // -1..1, 0 = sea level
-  moisture:    Float32Array; // 0..1
-  temperature: Float32Array; // 0..1, from latitude + elevation
-  biome:       Uint8Array;   // enum
-  owner:       Uint16Array;  // polity id, 0 = unclaimed
-  population:  Float32Array;
-  development: Float32Array; // infrastructure / land improvement
-  fertility:   Float32Array; // degrades with over-farming, recovers slowly
-  pollution:   Float32Array;
-  flags:       Uint8Array;   // RIVER | RUINS | COAST | ...
-}
+*Verified*: `tools/probe-terrain.ts` shows height converging to within 0.002 m as sample
+spacing falls from 64 m to 0.25 m.
+
+---
+
+## 3. Chunked-LOD terrain
+
+Six quadtrees, one per face of a **cube-sphere** (spherified, not normalised, so vertices
+spread evenly). Subdivision is driven by **screen-space error in pixels**, not world
+distance — the same setting then behaves correctly on a phone and a monitor, at any field
+of view, with no retuning.
+
+- Patch meshes are built in a **worker pool**, ~4 ms each, and recycled through a geometry
+  pool so a flight from orbit to ground allocates almost nothing after the first seconds.
+- Normals come from a **one-vertex halo** around each patch rather than extra height
+  samples: 12% more vertices instead of 200% more.
+- Vertices are stored **relative to the patch centre**, so float32 keeps centimetre
+  precision at ground level.
+- A node keeps drawing its own mesh until all four children arrive, so a fast zoom never
+  opens holes.
+- **Skirts** plug LOD cracks, kept short: a skirt is a vertical wall, and at the horizon
+  it is seen edge on.
+- **Horizon culling** by angle, because frustum culling alone leaves the entire far side of
+  the planet in the draw list whenever the camera looks along the surface.
+- An **adaptive governor** trims the error budget to hold the patch count near target. A
+  fixed pixel error is right for image quality but says nothing about cost: looking along
+  a mountain range at low altitude asks for several times the geometry of looking straight
+  down from orbit.
+
+---
+
+## 4. Rendering
+
+Deferred-ish, four passes:
+
+```
+scene ──► HDR colour + depth
+       ──► composite   (ocean, atmosphere, stars)
+       ──► bloom       (bright pass, two blurs, quarter resolution)
+       ──► final       (bloom add, ACES tone map, vignette, dither, sRGB)
 ```
 
-This gives us cache-friendly ticks, trivially cheap snapshots (one `ArrayBuffer` per
-field), and zero-copy transfer to the render thread.
+### The ocean is not geometry
 
-### Terrain generation
+The sea is a perfect sphere of known radius, so the view ray is **intersected with it
+analytically, per pixel**, in the composite pass. The waterline is therefore exact at
+every zoom — no tessellation to pick, no polygonal coastline when you fly down to a beach,
+no transparency sorting. Water depth comes from the scene depth buffer, which is what lets
+shallows show the sea floor through them and deeps swallow it.
 
-Ordered pipeline, all seeded:
+### Atmosphere
 
-1. **Plates** — scatter K ≈ 9 plate seeds on the sphere, assign each a random tangential
-   drift vector, Voronoi-assign every tile to its nearest seed. At plate boundaries,
-   compute relative motion: convergent → mountain ridge, divergent → rift/ocean trench,
-   transform → mild fault. This is ~150 lines and it is the single biggest reason a
-   generated planet reads as *believable* rather than as noise.
-2. **Elevation** — plate boundary contribution + 3-octave 3D simplex noise, smoothed once
-   over the tile graph.
-3. **Sea level** — threshold tuned so land is ~28–34% of tiles. Reject and re-roll the
-   seed if outside that band.
-4. **Temperature** — latitude curve minus elevation lapse rate.
-5. **Moisture** — ocean tiles seed moisture 1.0; diffuse inland over the tile graph with
-   distance decay, attenuated hard when crossing a large elevation gain (rain shadow).
-6. **Biome** — Whittaker-style 2D lookup on (temperature, moisture), overridden by
-   elevation for alpine/ice. ~12 biomes: ocean, coast, ice, tundra, taiga, temperate
-   forest, grassland, steppe, desert, savanna, tropical forest, alpine.
-7. **Rivers** — sort land tiles by elevation descending; each pushes its accumulated flux
-   to its lowest neighbour. Tiles above a flux threshold get the `RIVER` flag. Rivers
-   raise local fertility and act as trade/movement corridors in the sim.
+Single-scattering Rayleigh and Mie, raymarched, bounded by the same depth buffer — so one
+piece of code fogs distant mountains and rims the limb from orbit.
 
-Everything above runs in the worker at start, once, in well under a second.
+**The one genuinely hard problem here**, and the reason it is written down: how far you can
+see before the air whites out, and how blue the sky is overhead, are not independent. Their
+ratio is `distance / scaleHeight`. Earth gets away with an 8 km scale height because that
+is comparable to how far we care to see. This planet has a **one-kilometre radius**, so a
+scale height scaled to match would be metres — and standing on a hill, the next hill two
+hundred metres away would vanish in white haze while the zenith stayed clear. Scale it up
+instead and the halo from orbit swells into a fuzzy blue bubble.
 
-### Rendering — 3D geometry, 2D art
+The fix: **the scale height follows the camera, but the product `beta × H` is held
+constant**, pinning the vertical optical depth at the usual 0.35 in blue. The sky is the
+same colour and brightness at both ends; only the horizontal reach of the air changes. You
+never see the limb from the ground nor the ground from orbit, so nobody sees it move.
 
-The honest answer to "3D or sprites?" is **both, on purpose**:
+Sunlight is separately reddened and dimmed by the air it crossed to reach the ground, which
+is what produces golden hour. The scattering pass must use the **unextincted** solar colour,
+never the reddened one — feeding it pre-extincted light applies the same absorption twice
+and turns the dusk sky olive.
 
-- **Terrain** — one merged `BufferGeometry` for all land tiles, fanned from each tile
-  centroid. Per-vertex colour from the biome palette, multiplied in a custom shader by a
-  tiling detail/grain texture so it doesn't read as flat vector art. One draw call.
-- **Ocean** — a slightly smaller sphere with a cheap scrolling-normal shader, plus a
-  shoreline foam band derived from coast tiles.
-- **Borders** — a `LineSegments` geometry built from tile edges where
-  `owner[a] !== owner[b]`, coloured per polity. Rebuilt only when ownership actually
-  changes (typically a handful of ticks per century), not per frame.
-- **Settlements** — **instanced 2D billboard sprites** from a per-era atlas: hut,
-  hamlet, village, town, city, metropolis, arcology. Scale by population, swap by era.
-  Hand-drawn sprites at this size look dramatically better than low-poly models and cost
-  essentially nothing. One draw call for all settlements.
-- **Ambient life** — instanced billboard particles (caravans, war bands, ships) animated
-  along great-circle arcs between settlements. **Purely decorative, never simulated** —
-  spawn rate driven by trade volume and war state. Hard cap ~200, culled by zoom.
-- **Atmosphere** — a fresnel rim shader on a slightly larger back-face sphere. Trivial
-  cost, enormous perceived-quality payoff.
-- **Clouds** — a slowly counter-rotating alpha sphere with a seamless noise texture.
-- **Night side** — emissive city lights where population exceeds a threshold, blended
-  against the sun direction. The strongest single visual moment in the game for near-zero
-  cost, and it makes progress *visible*: a dark planet slowly lighting up over centuries.
+### Surface shading
 
-### Camera and LOD
+Biomes are a **continuous function** of temperature, moisture, altitude and slope — never a
+lookup into a tile type. A rainforest thins into savanna over kilometres instead of
+switching at a cell boundary. Beaches, exposed rock on steep ground, a snow line driven by
+temperature, and large-scale mineral variation that shows through arid ground and hides
+under vegetation.
 
-Orbit + pinch zoom, clamped. Zoom drives three bands:
-
-| Band | Shows |
-|---|---|
-| Far | Terrain, borders, clouds, atmosphere, night lights |
-| Mid | + settlement sprites |
-| Near | + ambient life, settlement labels, tile inspector on tap |
+Fragment-level detail noise fades by **how large a pixel is on that surface**, not by camera
+altitude: at 150 m up, terrain near the horizon is kilometres away, and detail sized for the
+ground underfoot is pure aliasing out there.
 
 ---
 
-## 3. The simulation
+## 5. The simulation
 
-This is the product. The graphics are the packaging.
+The product. The graphics are the packaging.
 
 ### Two hard rules
 
-1. **Fully deterministic.** Seeded PRNG (xoshiro128\*\*) threaded explicitly through the
-   tick. No `Math.random`, no `Date.now`, no floating-point iteration over unordered map
-   keys, anywhere inside `packages/sim`. Same seed + same player-event log ⇒ byte-identical
-   history, forever.
-2. **No citizen agents.** Population is a scalar per tile and per settlement. The little
-   people you see moving are renderer decoration derived from statistics. This is what
-   makes 143 years of offline progress resolvable in milliseconds, and nobody can tell the
-   difference.
+1. **Fully deterministic.** Seeded PRNG threaded explicitly. No `Math.random`, no
+   `Date.now`, nothing unordered inside the sim package. Same seed plus the same player
+   event log reproduces a history byte for byte — which makes saves a few KB after
+   millennia, makes worlds shareable, and makes the balance harness possible at all.
+2. **No citizen agents.** Population is a scalar. The people you see are renderer
+   decoration driven by statistics. This is what makes "143 years passed while you were
+   away" resolvable in milliseconds, and at phone zoom nobody can tell.
 
-### Entity hierarchy
+The simulation runs on an **invisible** cell graph over the sphere — points distributed by
+a Fibonacci spiral, with adjacency for spread and flow. It is never drawn. Territory is
+painted as a smooth field, so borders are soft curves, not cell edges.
+
+### Entities
 
 | Entity | Count | Holds |
 |---|---|---|
-| `Tile` | 2562 | terrain, owner, pop, development, fertility, pollution |
-| `Settlement` | ~10–200 | tile, pop, tier, buildings level, founded tick |
-| `Polity` | 2–12 | treasury, tech, stability, legitimacy, policies, relations, culture, religion |
-| `Culture` | 1–20 | traits, name pool, parent culture, birth/death tick |
-| `Religion` | 0–12 | traits, tolerance, spread rate, parent, birth/death tick |
-| `Event` | append-only | type + structured params + tick |
+| `Cell` | ~4000 | terrain sample, owner, population, development, fertility |
+| `Settlement` | 10–200 | cell, population, tier, founded tick |
+| `Polity` | 2–12 | treasury, tech, stability, legitimacy, policies, relations |
+| `Culture` / `Religion` | 1–20 | traits, name pool, parent, birth and death tick |
+| `Event` | append-only | type, structured parameters, tick |
 
 `Culture` and `Religion` are **independent of polities and outlive them**. That single
-design choice is what makes a 2000-year history feel like history rather than a scoreboard.
+choice is what makes a 2000-year history feel like history rather than a scoreboard.
 
-### Tick pipeline
+### Tick
 
-**One tick = one year.** Ordered, pure phases over the state:
-
-1. **Environment** — climate drift, pollution accumulation and decay, fertility
-   depletion/recovery.
-2. **Food** — per settlement: `biome yield × tech multiplier × fertility × policy`.
-3. **Population** — logistic growth toward a carrying capacity set by food and
-   development; starvation decline when food < demand.
-4. **Migration & expansion** — settlements over pressure threshold claim the best adjacent
-   unclaimed tile, or found a new settlement. Cost scales with distance from capital
-   (over-extension is a real penalty).
-5. **Economy** — production, trade routes between settlements and across polity borders,
-   treasury income and upkeep.
-6. **Knowledge** — tech accumulates from `population × education policy × trade contact ×
-   stability`. Crossing thresholds unlocks era transitions and tech nodes.
-7. **Culture & religion** — spread across adjacency and trade links, weighted by policy
-   and by the source polity's prestige. Schisms fork a new religion when tolerance is low
-   and spread is high.
-8. **Stability** — reduced by inequality, famine, war weariness, over-extension, religious
-   tension, pollution; raised by prosperity, culture policy, legitimacy.
-9. **Diplomacy & war** — abstract resolution. Army strength = `f(pop, tech, treasury, war
-   policy, terrain)`. Wars are multi-tick states with attrition, not instant coin flips.
-10. **Crisis roll** — famine, plague, civil war, invasion. Probability derived from state
-    (low food → famine; low stability + high inequality → civil war; high trade contact +
-    high density → plague), never from raw randomness alone.
-11. **Collapse & succession** — see below.
-12. **Event emission** — anything a human would notice becomes a structured `Event`.
+**One tick = one year.** Ordered pure phases: environment → food → population → migration
+and expansion → economy → knowledge → culture and religion → stability → diplomacy and war
+→ crisis → collapse and succession → event emission.
 
 ### Player input
 
-Six policy dials sharing a fixed budget (100 points):
+Six policy dials sharing a fixed budget: **Trade, War, Education, Expansion, Conservation,
+Culture**. That is all. The player is a pressure, not a commander — and a small typed input
+set is exactly what keeps deterministic replay tractable.
 
-**Trade · War · Education · Expansion · Conservation · Culture**
+### Collapse
 
-That's it. No unit orders, no building placement. The player is a *pressure*, not a
-commander — and constraining input to a small set of typed events is exactly what keeps
-the deterministic replay tractable. Every dial change is appended to the player-event log
-with its tick.
-
-### Collapse and succession — the signature feature
-
-When a polity's stability reaches zero, it does **not** game-over. It resolves into one of:
-
-- **Fragmentation** — settlements are k-means clustered on the sphere into 2–4 successor
-  polities. They inherit culture and religion, retain partial tech, start with low
-  legitimacy and hostile relations. The map redraws into a plausible set of rump states.
-- **Wasteland** — settlements are abandoned, tiles gain the `RUINS` flag, biome degrades,
-  fertility craters. Ruins are resettleable centuries later and grant a small tech bonus
-  to whoever excavates them.
-- **Conquest** — a neighbouring polity absorbs the territory, importing a restive
-  minority culture that suppresses stability for generations.
-
-Cultures and religions persist through all three. A dead empire's religion spreading
-through its conquerors 400 years later is the kind of moment that makes this game worth
-building.
-
-### Eras
-
-Gated on **tech thresholds, not elapsed time**, so a stagnant civilization genuinely
-stagnates.
-
-`Primitive → Ancient → Medieval → Industrial` **(MVP)** — later: `Modern → Futuristic`.
-
-Each era swaps the settlement sprite set, adjusts growth and trade curves, and unlocks new
-crisis types (Industrial unlocks pollution and ecological collapse).
+Stability reaching zero is never game over. It resolves as **fragmentation** (settlements
+k-means clustered into successor states), **wasteland** (ruins, resettleable centuries later
+with a tech bonus), or **conquest** (absorbing a restive minority that suppresses stability
+for generations). Cultures and religions survive all three.
 
 ### Offline progress
 
-- Rate: **1 tick per 30 real seconds**, capped at **2000 ticks** (~16 h of real time).
-- Time source: server timestamp when online; monotonic clock otherwise, with an explicit
-  "clock moved backwards" guard so setting the device date forward does nothing.
-- On resume: run catch-up in the worker behind a progress bar, then present a
-  **"While you were away"** digest — the 5 highest-weight events, plus the map diff.
-- One daily local notification carrying the single most significant event.
-
-### Save format
-
-```
-Save = { version, seed, tickCount, playerEventLog[], snapshot? }
-```
-
-- The **seed + player-event log** is the canonical save, and it is tiny (a few KB after
-  millennia).
-- A **binary snapshot** (all SoA arrays concatenated into one `ArrayBuffer`) is written
-  every 250 ticks purely as a load accelerator. Cold start = load latest snapshot + replay
-  the tail.
-- Because the sim is deterministic, a corrupt snapshot is recoverable by full replay, and
-  a save file is a shareable *world* — "seed 8829471, year 1840" reproduces exactly.
+One tick per 30 real seconds, capped around 2000 ticks. Server time when online, monotonic
+with a backwards-clock guard otherwise. On resume, catch-up runs in the worker behind a
+progress bar and presents a "while you were away" digest.
 
 ---
 
-## 4. Where an LLM actually earns its place
-
-Not per-event flavour text — templates beat it there on consistency, latency, and cost.
-Three uses that are genuinely worth it, all **bounded, cached, and optional**:
-
-1. **The Historian's Account.** Once per era transition or major collapse (~every 150–250
-   years), send the structured event log for that span and get back a titled, 3-paragraph
-   narrative history with named figures, causal framing, and a period voice. One call per
-   couple of centuries, cached permanently into the save. This produces something a
-   grammar cannot, and it is the feature people will screenshot.
-2. **Culture name generation.** When a culture is born, generate ~200 coherent toponyms,
-   ruler names, and religion names in one call, then cache and draw from the pool
-   deterministically forever. One call per culture. Markov chains work but are visibly
-   worse.
-3. **Ask your Chronicler** (stretch). A Q&A over the event log — "why did the Vashti
-   Empire fall?" — answered strictly from retrieved structured events, not invented.
-
-**Cost control is a design constraint, not an afterthought:** every call is behind a
-feature flag, results are cached into the save, the template path is always a complete
-fallback, and the whole feature sits behind the paid tier so spend tracks revenue. The
-game must be fully playable and fully readable with the network off.
-
----
-
-## 5. Threading
-
-```
-┌─ Main thread ──────────┐        ┌─ Worker ────────────────┐
-│ three.js renderer      │◀──────▶│ worldgen                │
-│ React HUD              │ post   │ sim tick loop           │
-│ input, camera          │ Message│ event log               │
-│ animation/interpolation│        │ snapshot serialisation  │
-└────────────────────────┘        └─────────────────────────┘
-```
-
-- The worker sends a compact **render delta** per tick: changed tile owners, the settlement
-  list, new events. Transferable `ArrayBuffer`s, zero copy.
-- The renderer interpolates between ticks and **never reads sim internals**. This boundary
-  is what lets the identical sim run headless in Node.
-- Main thread never blocks, even during a 2000-tick catch-up.
-
----
-
-## 6. Repository layout
-
-```
-packages/
-  sim/         pure TS simulation — no DOM, no three.js, no I/O
-  worldgen/    sphere mesh, plates, terrain, biomes, rivers (browser + node)
-  render/      three.js scene, shaders, sprite atlases, camera
-  chronicle/   event → text grammar; optional LLM adapter
-apps/
-  game/        Vite + React HUD, worker wiring, Capacitor entry
-tools/
-  soak/        headless balance harness
-android/       Capacitor Android project
-docs/          this plan, ADRs, art notes
-```
-
-`packages/sim` importing anything from `render` or the DOM is a build error. Enforce it
-with an ESLint boundary rule from day one.
-
----
-
-## 7. The balance harness — build it at M2, not at the end
+## 6. The balance harness — at M2, not at the end
 
 The hard problem in this genre is not rendering. It is that long-horizon economies drift
 into degenerate equilibria: everything grows forever, or everything dies by year 300.
 
-`tools/soak` runs **500 seeds × 3000 ticks headless** and asserts:
+`tools/soak` runs **500 seeds × 3000 ticks headless** and asserts no NaN, no negative
+population, no unbounded treasury; that 20–60% of civilizations reach Industrial by year
+2000; that collapse occurs in 40–80% of runs; and that tick time stays under budget. It
+runs in CI on every change to the sim.
 
-- No `NaN`, no negative population, no unbounded treasury, in any run.
-- 20–60% of civilizations reach Industrial by year 2000.
-- At least one collapse event occurs in 40–80% of runs.
-- No run reaches zero polities before year 500.
-- p99 tick time under budget.
-- Distribution histograms for population, tech, polity count, collapse cause.
+This is simultaneously what keeps the game fun and the strongest engineering artifact in
+the project.
 
-It runs in CI on every push to `packages/sim`. This is simultaneously the thing that keeps
-the game fun and the strongest engineering artifact in the whole project.
+---
+
+## 7. Visual regression harness
+
+`npm run shot` builds the app, serves it, drives the camera through a fixed set of
+viewpoints, waits for the LOD system to report it has nothing left to build, and captures
+each one. Deterministic seed and a pinned sun make two runs comparable.
+
+This has already earned itself several times over. It caught a snow line that keyed off
+maximum elevation and so froze every temperate continent; ocean absorption tuned for
+Earth's bathymetry on a planet whose deepest trench is 22 m; a detail-normal gradient
+missing its division by the sample epsilon, which threw specular hotspots across the whole
+landscape; and a sun angle in the harness itself that was shooting "mountains at dawn" on
+the night side of the planet.
+
+It is also worth recording what it *disproved*: a stair-stepped planet limb that looked
+exactly like an LOD bug survived an eightfold increase in tessellation unchanged, and
+turned out to be the harness upscaling a reduced-resolution buffer across a high-contrast
+edge. Shots now always render 1:1.
 
 ---
 
@@ -354,35 +263,38 @@ the game fun and the strongest engineering artifact in the whole project.
 
 ### In (MVP)
 
-Planet of 2562 tiles · plate-driven terrain, biomes, rivers · 3 starting polities · 6 policy
-dials · 4 eras · ~20 tech nodes · settlements with per-era sprites · borders · culture and
-religion spread and schism · 4 crisis types · collapse with fragmentation / wasteland /
-conquest · resettleable ruins · template chronicle with a timeline scrubber · offline
-catch-up + "while you were away" digest · one daily notification · save/load · settings ·
-low-end 642-tile mode.
+Continuous procedural planet, orbit to ground · analytic ocean with depth, foam and glint ·
+scattering atmosphere with golden hour · starfield, bloom, tone mapping · ~4000-cell
+invisible sim graph · 3 starting polities · 6 policy dials · 4 eras · settlements with
+per-era sprites · soft painted territory · culture and religion spread and schism · 4 crisis
+types · collapse with fragmentation, wasteland and conquest · resettleable ruins · template
+chronicle with a timeline · offline catch-up and digest · save/load · quality tiers ·
+ground-level buildings and billboard citizens.
 
-### Out (explicitly, for MVP)
+### Out (explicitly)
 
-Individual citizen agents · unit-level armies · roads · 3D building models · Modern /
-Futuristic / Spacefaring eras · zombies · nuclear war · multiple planets · multiplayer ·
-LLM features (built behind a flag, shipped later) · monetization · cloud save · iOS.
+Citizen agents · unit-level armies · roads · Modern, Futuristic and Spacefaring eras ·
+zombies · nuclear war · multiple planets · multiplayer · **any LLM** · cloud save · iOS ·
+monetization.
 
-Adding anything from the right column requires cutting something from the left.
+Adding anything from the right column means cutting something from the left.
 
 ---
 
-## 9. Milestones
+## 9. Status
 
-| # | Week | Deliverable | Done when |
-|---|---|---|---|
-| M0 | 1 | Capacitor + three.js shell | A lit sphere spins at 60 fps on a physical device, installed from an AAB |
-| M1 | 2 | Worldgen | Goldberg sphere, plates, elevation, biomes, rivers. It looks like a planet |
-| M2 | 3–4 | Sim core in worker | Pop, food, settlements, expansion, borders. **Soak harness green** |
-| M3 | 5 | Tech, eras, policies, HUD | Player can shift dials and see divergent 500-year outcomes |
-| M4 | 6 | Culture, religion, crises, collapse | A civ can fall and successor states appear on the map |
-| M5 | 7 | Chronicle, timeline, offline catch-up, notifications | Close the app, return, read what happened |
-| M6 | 8 | Visual pass | Atmosphere, clouds, night lights, sprites, ambient life |
-| M7 | 9 | Hardening & release | Save/load, low-end mode, perf pass, Play Store internal test track |
+| Milestone | State |
+|---|---|
+| M0 Web app shell, deployable | **done** |
+| M1 Planet: terrain, cube-sphere LOD, worker meshing | **done** |
+| M2 Rendering: ocean, atmosphere, bloom, golden hour | **done** |
+| M3 Camera: orbit-to-ground, touch and mouse input | **done** |
+| M4 Visual regression harness | **done** |
+| M5 Simulation core and soak harness | next |
+| M6 Settlements, territory, night lights | |
+| M7 Chronicle, timeline, offline catch-up | |
+| M8 Ground detail: buildings, billboard citizens | |
+| M9 Capacitor wrap, Play Store internal test | |
 
 ---
 
@@ -390,20 +302,8 @@ Adding anything from the right column requires cutting something from the left.
 
 | Risk | Mitigation |
 |---|---|
-| WebView perf on low-end devices | 642-tile mode, sprite caps, LOD bands. Test on a real budget device at M0, not M7 |
-| Tick cost grows past budget as systems land | Tick time asserted in the soak harness from M2; it fails CI |
-| Balance drift into degenerate states | The soak harness is the whole answer, which is why it exists at M2 |
-| Scope creep | §8's Out list is a contract. Trade, don't add |
-| Determinism silently broken | A CI test replays a fixed seed + event log and diffs the final state hash |
-| Save migration across versions | Version the save; the seed + event log is canonical, so migration means replay, not surgery |
-| LLM cost | Bounded call sites, permanent caching, full template fallback, paid-tier gate |
-
----
-
-## 11. Immediate next steps
-
-1. Scaffold the monorepo (pnpm workspaces) with the boundary lint rule.
-2. M0: Capacitor Android project + three.js sphere on a real device. Prove the pipeline
-   before writing any simulation.
-3. Stand up `tools/soak` as an empty harness that already runs in CI, so the sim can never
-   be written without it.
+| Phone GPU performance | Quality tiers, adaptive patch governor, half-resolution bloom. Test on a real budget device before M8, not after |
+| Sim drifting to degenerate states | The soak harness, at M5, gating CI |
+| Scope creep | §8's Out list is a contract. Trade, do not add |
+| Determinism silently broken | CI replays a fixed seed and diffs the final state hash |
+| Ground-level detail costing more than it is worth | It is the last milestone for a reason; the planet has to stand on its own first |
