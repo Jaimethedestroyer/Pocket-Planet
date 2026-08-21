@@ -423,6 +423,18 @@ export class TerrainSystem {
     this.meshPool.push(mesh);
   }
 
+  /**
+   * Forget the adaptive error budget.
+   *
+   * The budget is an estimate of how much geometry the current view costs, and
+   * a teleport invalidates it: jumping from a low pass over a mountain range to
+   * an orbital view would otherwise arrive carrying the mountain range's
+   * pessimism and render the planet coarse for a second or two.
+   */
+  resetBudget(): void {
+    this.errorScale = 1;
+  }
+
   getStats(): Readonly<TerrainStats> {
     return this.stats;
   }

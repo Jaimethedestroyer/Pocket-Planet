@@ -238,6 +238,10 @@ export class PocketPlanetApp {
   }
 
   setView(view: ViewState): void {
+    // A jump is not motion: whatever the LOD system learned about the cost of
+    // the last viewpoint says nothing about this one.
+    this.terrain.resetBudget();
+
     if (view.lat !== undefined || view.lon !== undefined) {
       const lat = THREE.MathUtils.degToRad(view.lat ?? 0);
       const lon = THREE.MathUtils.degToRad(view.lon ?? 0);
