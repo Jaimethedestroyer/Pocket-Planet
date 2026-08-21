@@ -48,15 +48,14 @@ fly-to camera is the same rig with an eased target.
 
 This turns the chronicle from a ticker into a set of doorways.
 
-### 3. Clouds · **M**
+### 3. Clouds · **done**
 
-There is a cloud layer in the quality settings and nothing behind it. From orbit — the
-game's main viewing angle — this is the largest remaining visual gap, and weather
-systems drifting over a planet is a strong idle-game texture.
+A raymarched volumetric deck above the terrain: self-shadowing, casting moving
+shadows on the ground, drifting with the wind, adjustable from clear to overcast.
 
-An animated noise shell above the surface, lit by the same sun and shadowing the ground
-below it. Later it can be driven by the simulation's own moisture field, so a drought
-looks like one.
+What remains here is to drive coverage from the simulation's own moisture and
+temperature fields, so that a drought actually looks like one and the wet belts sit
+where the climate model already says they are.
 
 ### 4. Trade routes and roads · **M**
 
@@ -98,11 +97,37 @@ Great works that persist through collapse and show as distinct markers. Excellen
 chronicle material, gives ruins a reason to be found, and makes a planet's history
 visible in its geography.
 
-### Ground detail: buildings and billboard citizens · **L**
-The milestone deliberately left alone. Instanced buildings and animated sprite citizens
-at the closest LOD band. High effort, and it only pays off at maximum zoom — but it is
-the thing that makes the last part of the descent worth doing, and it is where the
-sprite-sheet plan fits.
+### Ground detail: buildings, roads and citizens · **L**
+
+The milestone deliberately left alone, and the one where the 3D-or-2D question
+actually matters. The answer differs per thing, and one rule decides it:
+
+> **Billboard anything small, numerous, and roughly the same from every side.
+> Model anything with a footprint you can walk around.**
+
+A billboard is a flat card that turns to face the camera. That is invisible for a
+person thirty pixels tall, and instantly wrong for a building — because a building
+is fixed to the ground, and the moment you orbit it a card either turns with you,
+so the building appears to spin in place, or it does not, so you see a flat sheet
+edge on. Buildings also have to occlude each other and take the sun correctly, and
+geometry gives both for free.
+
+| Thing | Form | Why |
+|---|---|---|
+| **People** | **Billboards**, animated sprite sheets | Thirty pixels tall and roughly symmetric. A four-to-eight-frame walk cycle is indistinguishable from 3D at that size, and thousands cost one draw call. This is exactly where the sprite-sheet plan fits. |
+| **Small buildings** — huts, houses, workshops | **Instanced 3D**, 10–30 triangles each | A box and a prism roof. One instanced draw call for a whole town, varied per instance by scale, rotation and colour. Fixed to the ground, so they have to be real geometry. |
+| **Large structures** — palaces, temples, wonders | **3D**, from a parts kit | There are few of them, so they can afford detail, and they are the landmarks a player navigates by. |
+| **Roads** | **Ribbon geometry** draped on the terrain | A strip mesh following the path, sampled against the height field. Not sprites — a road has to sit *on* the ground, following every rise. |
+| **Trees, crops, rubble** | **Crossed quads** — two billboards at right angles | The classic middle ground: holds up when you walk past, unlike a single card, at a fraction of a model's cost. |
+
+Scale note: this planet has a one-kilometre radius, so a person is 1.7 m against a
+6 km circumference — roughly a person against a small town on Earth. That is why
+citizens only need to exist in the closest LOD band, and why a settlement's sprite
+stays the right representation everywhere above it.
+
+Build order: buildings first, because they are what makes a town read as a town;
+then roads between them; then people last, because people only pay off in the final
+few metres of a descent and everything else reads from much higher up.
 
 ### Terrain detail textures · **M**
 Procedural grain gets the ground surprisingly far, but triplanar grass, rock and sand at
@@ -153,7 +178,6 @@ is not failure, and that the world keeps running when you leave.
 1. Real-device performance pass — before building anything else on top of unknowns
 2. Timeline scrubber — the demo, and nearly free
 3. Tap to inspect — closes the interaction gap
-4. Clouds — the biggest remaining visual gap from the main viewing angle
-5. Named rulers — cheapest chronicle improvement available
-6. Capacitor wrap, notifications, onboarding — make it a thing people can actually keep
-7. Trade routes, rivers, wonders — depth, in whatever order stays interesting
+4. Named rulers — cheapest chronicle improvement available
+5. Capacitor wrap, notifications, onboarding — make it a thing people can actually keep
+6. Trade routes, rivers, wonders — depth, in whatever order stays interesting
