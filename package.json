@@ -14,7 +14,8 @@
     "probe": "tsx tools/probe-terrain.ts",
     "history": "tsx tools/history.ts",
     "verify-save": "node tools/verify-save.mjs",
-    "verify-motion": "node tools/verify-motion.mjs"
+    "verify-motion": "node tools/verify-motion.mjs",
+    "verify-camera": "node tools/verify-camera.mjs"
   },
   "dependencies": {
     "three": "^0.169.0"

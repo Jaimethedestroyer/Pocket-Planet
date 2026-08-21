@@ -248,6 +248,8 @@ export class PocketPlanetApp {
       const c = Math.cos(lat);
       this.rig.target.set(c * Math.cos(lon), Math.sin(lat), c * Math.sin(lon));
     }
+    this.rig.stopMomentum();
+
     if (view.altitude !== undefined) {
       this.rig.altitude = view.altitude;
       this.rig.zoom(0);

@@ -1,5 +1,7 @@
 import { PocketPlanetApp } from './app';
 import { Hud } from './ui/hud';
+import { Vector3 } from 'three';
+import { PLANET_RADIUS } from './planet/config';
 import type { ViewState } from './app';
 import type { QualityTier } from './planet/config';
 
@@ -139,6 +141,9 @@ declare global {
       skipBoot(): void;
       runYears(years: number): void;
       setSpeed(yearsPerSecond: number): void;
+      pick(x: number, y: number): [number, number, number] | null;
+      project(v: [number, number, number]): [number, number] | null;
+      cameraTarget(): [number, number, number];
     };
   }
 }
@@ -157,4 +162,20 @@ window.pocketPlanet = {
   },
   runYears: (years) => app.sim.catchUp(years),
   setSpeed: (yearsPerSecond) => app.sim.setSpeed(yearsPerSecond),
+  pick: (x, y) => {
+    const v = app.rig.pickWorld(x, y);
+    return v ? [v.x, v.y, v.z] : null;
+  },
+  project: (v) => {
+    const world = new Vector3(v[0], v[1], v[2]).multiplyScalar(PLANET_RADIUS);
+    // Behind the camera projects to a mirrored position rather than to
+    // nothing, so reject it explicitly.
+    const toPoint = world.clone().sub(app.camera.position);
+    const forward = app.camera.getWorldDirection(new Vector3());
+    if (toPoint.dot(forward) <= 0) return null;
+    const p = world.project(app.camera);
+    if (p.z > 1) return null;
+    return [((p.x + 1) / 2) * innerWidth, ((1 - p.y) / 2) * innerHeight];
+  },
+  cameraTarget: () => [app.rig.target.x, app.rig.target.y, app.rig.target.z],
 };
