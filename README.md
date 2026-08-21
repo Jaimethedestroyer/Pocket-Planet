@@ -28,6 +28,7 @@ npm run soak         # 120 worlds x 3000 years, headless, with assertions
 npm run history      # print one world's chronicle as the player would read it
 npm run verify-save  # prove a reloaded world is the same world
 npm run verify-motion # prove the sea still moves
+npm run verify-camera # prove the planet follows your finger
 npm run shot         # render the reference screenshots headlessly
 npm run probe        # check the terrain function's statistics
 ```
@@ -60,6 +61,8 @@ The planet, the simulation living on it, and an interface to nudge it.
   and depth comes from the depth buffer.
 - **Physically-based atmospheric scattering**, with aerial perspective, a glowing limb,
   and golden hour on the ground.
+- **Volumetric clouds**, raymarched, self-shadowing, and casting moving shadows on the
+  terrain below them.
 - **Water that moves at every scale.** Three wave bands, each fading out once it drops
   below about four pixels; whatever fades out of the geometry becomes roughness instead,
   so the sun's reflection broadens into real glitter rather than the sea going glassy as
