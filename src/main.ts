@@ -52,9 +52,11 @@ if (Object.keys(view).length > 0) app.setView(view);
 
 // `?kit=all` swaps the world's towns for a sheet of every model in the
 // catalogue, laid out on the ground the camera is looking at; `?kit=2` shows
-// one row of six, close enough to judge. Development only; see showcase.ts.
+// row two of six, close enough to judge. Development only; see showcase.ts.
+// Row numbers are taken literally — `kit=1` used to also mean "all", which
+// made the one row nobody could look at the ancient one.
 const kit = params.get('kit');
-if (kit !== null) app.ground.setShowcase(kit === 'all' || kit === '1' ? 'all' : Number(kit));
+if (kit !== null) app.ground.setShowcase(kit === 'all' ? 'all' : Number(kit));
 
 // --- Game interface --------------------------------------------------------
 

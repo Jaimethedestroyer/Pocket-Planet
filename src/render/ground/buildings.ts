@@ -208,7 +208,12 @@ void main() {
     float mortar = max(smoothstep(0.86, 1.0, bed), smoothstep(0.93, 1.0, perp) * 0.7);
     // Roughness on the courses themselves, so they are not ruled lines.
     mortar *= 0.65 + 0.35 * fbm3(vWorldPos * 6.0 + row);
-    albedo *= 1.0 - mortar * 0.42 * detail * max(vStyle, roofy * 0.8);
+    // Roofs course more strongly than the walls under them — tiles are laid in
+    // deep visible rows where the brickwork behind has already gone sub-pixel —
+    // but they are still the *same building's* material. Forcing a floor here
+    // rather than scaling gave a thatched hut the coursing of a brick terrace.
+    float coursing = min(1.0, vStyle * mix(1.0, 1.7, roofy));
+    albedo *= 1.0 - mortar * 0.42 * detail * coursing;
 
     // Weathering: streaks running down from the eaves.
     float streak = fbm3(vec3(uv.x * 5.0, uv.y * 0.7, row)) - 0.5;

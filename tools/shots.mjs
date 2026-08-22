@@ -57,6 +57,9 @@ const SHOTS = [
   // The model catalogue, on real ground, in known light. Run with KIT=1.
   { name: 'kit', lat: 3.5, lon: 94.5, altitude: 200, heading: 0, tilt: -0.62, sunOffset: -40, frame: true },
   { name: 'kit-low', lat: 3.5, lon: 94.5, altitude: 95, heading: 0, tilt: -0.62, sunOffset: -50, frame: true },
+  // Close enough for the small models — a well is under three metres, and at
+  // ninety metres it is nine pixels of nothing.
+  { name: 'kit-prop', lat: 3.5, lon: 94.5, altitude: 40, heading: 0, tilt: -0.45, sunOffset: -58, frame: true },
   { name: 'town', town: 0, altitude: 220, heading: 40, tilt: -0.42, sunOffset: -52, years: 700, frame: true },
   { name: 'town-street', town: 0, altitude: 40, heading: 40, tilt: -0.5, sunOffset: -64, years: 0, frame: true },
   { name: 'town-night', town: 0, altitude: 170, heading: 40, tilt: -0.4, sunOffset: -140, years: 0, frame: true },

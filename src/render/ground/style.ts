@@ -94,8 +94,10 @@ const BASE: Record<Era, Omit<TownStyle, 'era'>> = {
     monuments: ['ziggurat', 'temple', 'colossus', 'obelisk'],
     wallA: [0.52, 0.46, 0.35],
     wallB: [0.76, 0.70, 0.56],
-    roofA: [0.52, 0.45, 0.34],
-    roofB: [0.70, 0.38, 0.24],
+    // Dusty flat mud at one end, fired terracotta at the other: this era has
+    // both, and the range has to cover them because it is one palette.
+    roofA: [0.40, 0.35, 0.27],
+    roofB: [0.66, 0.36, 0.23],
     road: [0.48, 0.43, 0.34],
     roadWidth: 4.0,
     frontage: 9.5,
