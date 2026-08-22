@@ -13,7 +13,9 @@ import {
 import type {
   PolicyChange,
   PolityView,
+  RuinView,
   SettlementView,
+  WonderView,
   SimCommand,
   SimMessage,
 } from '../sim/protocol';
@@ -25,6 +27,8 @@ export interface ChronicleLine {
   tick: number;
   text: string;
   weight: number;
+  /** Where it happened, when the event knew. Tapping the line flies there. */
+  cell?: number;
 }
 
 export class SimClient {
@@ -35,9 +39,15 @@ export class SimClient {
 
   cellPositions: Float32Array | null = null;
   cellHeights: Float32Array | null = null;
+  /** Which polity holds each cell. Zero is unclaimed. */
+  cellOwner: Uint16Array | null = null;
 
   tick = 0;
   settlements: SettlementView[] = [];
+  /** Abandoned settlements. Only replaced when the worker says they changed. */
+  ruins: RuinView[] = [];
+  /** Great works. Same: replaced only when one is raised. */
+  wonders: WonderView[] = [];
   polities: PolityView[] = [];
   playerPolity = 0;
   totalPopulation = 0;
@@ -151,11 +161,14 @@ export class SimClient {
 
     this.tick = msg.tick;
     this.settlements = msg.settlements;
+    if (msg.ruins) this.ruins = msg.ruins;
+    if (msg.wonders) this.wonders = msg.wonders;
     this.polities = msg.polities;
     this.playerPolity = msg.playerPolity;
     this.totalPopulation = msg.totalPopulation;
     this.livingPolities = msg.livingPolities;
 
+    if (msg.owner) this.cellOwner = msg.owner;
     if (msg.territory) {
       this.territoryTexture.image.data.set(msg.territory);
       this.territoryTexture.needsUpdate = true;

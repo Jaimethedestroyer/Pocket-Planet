@@ -118,9 +118,56 @@ export class CameraRig {
    * feel like arriving somewhere rather than falling onto a map.
    */
   private get tilt(): number {
-    const t = THREE.MathUtils.smoothstep(this.altitude, 12, PLANET_RADIUS * 0.55);
+    return this.tiltAt(this.altitude);
+  }
+
+  private tiltAt(altitude: number): number {
+    const t = THREE.MathUtils.smoothstep(altitude, 12, PLANET_RADIUS * 0.55);
     return THREE.MathUtils.clamp((1 - t) * 1.18 + this.tiltOffset, 0, 1.45);
   }
+
+  /**
+   * Where the camera has to sit for a given point to end up in the middle of
+   * the frame.
+   *
+   * The rig hangs above its target and looks along its heading, so the target
+   * is only in the centre of the screen when the view points straight down.
+   * By a couple of hundred metres the tilt has opened past half the field of
+   * view and the thing you asked to look at is *below the bottom of the
+   * frame*, underneath the camera rather than in front of it. Every flight to
+   * a town, and every screenshot of one, wants the town in the middle — so the
+   * nadir is walked back along the heading by however far the tilt throws the
+   * view forward, which is altitude x tan(tilt), expressed as an angle on the
+   * sphere.
+   */
+  private framedTarget(direction: THREE.Vector3, altitude: number, out: THREE.Vector3): void {
+    out.copy(direction).normalize();
+
+    // The heading frame as it will be *after* the move, so the offset goes the
+    // way the camera will actually be looking.
+    this.quat.setFromUnitVectors(this.target, out);
+    const north = this.tmp.copy(this.north).applyQuaternion(this.quat);
+    north.addScaledVector(out, -north.dot(out));
+    if (north.lengthSq() < 1e-10) return;
+    north.normalize();
+
+    this.frameEast.crossVectors(north, out).normalize();
+    this.frameForward
+      .copy(north)
+      .multiplyScalar(Math.cos(this.targetHeading))
+      .addScaledVector(this.frameEast, Math.sin(this.targetHeading));
+
+    const arc = (altitude * Math.tan(this.tiltAt(altitude))) / PLANET_RADIUS;
+    if (!Number.isFinite(arc) || Math.abs(arc) < 1e-6) return;
+    this.frameEast.crossVectors(out, this.frameForward);
+    if (this.frameEast.lengthSq() < 1e-10) return;
+    this.frameEast.normalize();
+    out.applyAxisAngle(this.frameEast, -arc).normalize();
+  }
+
+  private frameEast = new THREE.Vector3();
+  private frameForward = new THREE.Vector3();
+  private frameOut = new THREE.Vector3();
 
   /**
    * Where a screen position lands on the planet.
@@ -170,6 +217,17 @@ export class CameraRig {
    */
   pickWorld(clientX: number, clientY: number, out = new THREE.Vector3()): THREE.Vector3 | null {
     return this.pickSphere(clientX, clientY, out) ? out : null;
+  }
+
+  /**
+   * Place the view so that a point ends up in the middle of the frame, at once.
+   *
+   * The jump version of flyTo(), for setting a view from a URL or a test.
+   */
+  frameOn(direction: THREE.Vector3, altitude: number): void {
+    this.framedTarget(direction, altitude, this.frameOut);
+    this.quat.setFromUnitVectors(this.target, this.frameOut);
+    this.rotateFrame(this.quat);
   }
 
   /** Rotate the whole view frame, keeping target and north orthonormal. */
@@ -244,10 +302,75 @@ export class CameraRig {
     this.spinSpeed = 0;
   }
 
+  /**
+   * Ease the view to a point on the planet, optionally changing altitude.
+   *
+   * A rotation, not a translation: the flight is a slerp of the target
+   * direction, so it takes the great-circle route and arrives with the same
+   * bearing whichever side of the planet it started on. Interpolating the
+   * target's components instead would cut through the planet, and the halfway
+   * point of the flight would be somewhere under the crust.
+   */
+  flyTo(direction: THREE.Vector3, altitude?: number): void {
+    this.flightFrom.copy(this.target).normalize();
+    // Arrive with the destination framed, not underfoot.
+    this.framedTarget(direction, altitude ?? this.targetAltitude, this.flightTo);
+    const angle = Math.acos(THREE.MathUtils.clamp(this.flightFrom.dot(this.flightTo), -1, 1));
+    if (angle < 1e-3 && altitude === undefined) return;
+
+    // Long trips take longer, but sub-linearly: crossing the planet should feel
+    // like a journey, not like waiting.
+    this.flightDuration = THREE.MathUtils.clamp(0.55 + Math.sqrt(angle) * 0.9, 0.5, 2.0);
+    this.flightTime = 0;
+    this.flying = true;
+    this.autoRotate = false;
+    this.spinSpeed = 0;
+    if (altitude !== undefined) {
+      this.targetAltitude = THREE.MathUtils.clamp(altitude, MIN_ALTITUDE, MAX_ALTITUDE);
+    }
+  }
+
+  /** True while a flight is in progress. */
+  get inFlight(): boolean {
+    return this.flying;
+  }
+
+  private flying = false;
+  private flightTime = 0;
+  private flightDuration = 1;
+  private flightFrom = new THREE.Vector3();
+  private flightTo = new THREE.Vector3();
+  private flightAxis = new THREE.Vector3();
+
+  private advanceFlight(dt: number): void {
+    this.flightTime += dt;
+    const t = Math.min(1, this.flightTime / this.flightDuration);
+    // Ease in and out. A flight that starts and stops abruptly reads as a cut.
+    const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+    this.tmp.copy(this.flightFrom).lerp(this.flightTo, e);
+    if (this.tmp.lengthSq() < 1e-8) {
+      // Antipodal: the lerp passes through the centre. Any great circle will
+      // do, so pick one perpendicular to the start.
+      this.flightAxis.set(0, 1, 0).cross(this.flightFrom);
+      if (this.flightAxis.lengthSq() < 1e-6) this.flightAxis.set(1, 0, 0);
+      this.tmp.copy(this.flightAxis);
+    }
+    this.tmp.normalize();
+
+    // Rotate the whole frame rather than assigning the target, so `north` — and
+    // therefore the heading — comes along with it.
+    this.quat.setFromUnitVectors(this.target, this.tmp);
+    this.rotateFrame(this.quat);
+    if (t >= 1) this.flying = false;
+  }
+
   update(dt: number, camera: THREE.PerspectiveCamera): void {
     this.camera = camera;
 
-    if (this.autoRotate) {
+    if (this.flying) {
+      this.advanceFlight(dt);
+    } else if (this.autoRotate) {
       this.buildBasis();
       this.spin(this.up, -this.autoRotateSpeed * dt);
     } else if (!this.dragging && Math.abs(this.spinSpeed) > MOMENTUM_CUTOFF) {
@@ -332,12 +455,28 @@ export class CameraRig {
     this.east.crossVectors(this.north, this.up).normalize();
   }
 
+  /**
+   * Called when a pointer went down and came up in the same place.
+   *
+   * The rig has to be the one to decide this, because it is the only thing that
+   * knows whether the gesture turned into a drag. A separate click listener on
+   * the canvas fires after every drag as well, which means every time you spin
+   * the planet you also tap whatever ended up under your finger.
+   */
+  onTap: ((clientX: number, clientY: number) => void) | null = null;
+
   /** Wire up pointer, wheel and touch input on a canvas. */
   attach(element: HTMLElement): () => void {
     this.element = element;
     const pointers = new Map<number, { x: number; y: number; time: number }>();
     let pinchDistance = 0;
     let lastMoveTime = 0;
+    /** Where and when the gesture started, and how far it has wandered. */
+    let downX = 0;
+    let downY = 0;
+    let downTime = 0;
+    let travelled = 0;
+    let multiTouch = false;
 
     const currentPinch = (): number => {
       const [a, b] = [...pointers.values()];
@@ -349,8 +488,18 @@ export class CameraRig {
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, time: performance.now() });
       this.autoRotate = false;
       this.spinSpeed = 0;
+      this.flying = false;
       this.dragging = true;
-      if (pointers.size === 2) pinchDistance = currentPinch();
+      if (pointers.size === 1) {
+        downX = e.clientX;
+        downY = e.clientY;
+        downTime = performance.now();
+        travelled = 0;
+        multiTouch = false;
+      } else {
+        multiTouch = true;
+        pinchDistance = currentPinch();
+      }
     };
 
     const onPointerMove = (e: PointerEvent): void => {
@@ -361,6 +510,7 @@ export class CameraRig {
       const dt = Math.max(0.001, (now - prev.time) / 1000);
 
       if (pointers.size === 1) {
+        travelled += Math.hypot(e.clientX - prev.x, e.clientY - prev.y);
         this.dragBetween(prev.x, prev.y, e.clientX, e.clientY, dt);
       } else if (pointers.size === 2) {
         prev.x = e.clientX;
@@ -384,6 +534,17 @@ export class CameraRig {
         this.dragging = false;
         // Only a gesture that was still moving when it ended should coast.
         if (performance.now() - lastMoveTime > 90) this.spinSpeed = 0;
+
+        // A tap. The slop allowance is generous on purpose: a thumb on a phone
+        // moves several pixels during a deliberate tap, and a threshold tight
+        // enough to be theoretically correct makes the world feel unresponsive
+        // to exactly the people it was built for.
+        const held = performance.now() - downTime;
+        const drift = Math.hypot(e.clientX - downX, e.clientY - downY);
+        if (!multiTouch && held < 420 && drift < 12 && travelled < 20) {
+          this.spinSpeed = 0;
+          this.onTap?.(e.clientX, e.clientY);
+        }
       }
     };
 

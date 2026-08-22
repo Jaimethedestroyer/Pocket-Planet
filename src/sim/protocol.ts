@@ -87,6 +87,30 @@ export interface SettlementView {
   polity: number;
   population: number;
   name: string;
+  /** Year it was founded, so a tapped town can say how old it is. */
+  founded: number;
+}
+
+/**
+ * A great work, and the year and the state that raised it.
+ *
+ * Sent as its own list rather than folded into the settlements, because a
+ * wonder outlives its town: the whole point is that the ziggurat is still
+ * standing over the ruins nine hundred years later.
+ */
+export interface WonderView {
+  cell: number;
+  kind: string;
+  built: number;
+  builderName: string;
+  name: string;
+}
+
+/** A settlement that emptied. The renderer builds ruins where these are. */
+export interface RuinView {
+  cell: number;
+  name: string;
+  abandoned: number;
 }
 
 export interface PolityView {
@@ -94,6 +118,8 @@ export interface PolityView {
   name: string;
   alive: boolean;
   hue: number;
+  /** Cell of the seat of government. Its town gets the great work. */
+  capital: number;
   era: Era;
   tech: number;
   stability: number;
@@ -116,11 +142,27 @@ export interface SimStateMessage {
    * render as painted curves rather than as the cell graph underneath.
    */
   territory: Uint8ClampedArray | null;
+  /**
+   * Which polity holds each cell, sent alongside the territory field.
+   *
+   * The painted field is a blended image and cannot be read backwards at a
+   * border; this is the ground truth, and at two bytes a cell it is a rounding
+   * error next to the half-megabyte texture it travels with.
+   */
+  owner: Uint16Array | null;
   settlements: SettlementView[];
   polities: PolityView[];
   playerPolity: number;
+  /**
+   * Abandoned settlements, or null when the set has not changed. Ruins move
+   * once a century at most, and re-sending them every quarter second would be
+   * the largest thing in this message for no reason.
+   */
+  ruins: RuinView[] | null;
+  /** Great works, or null when none has been raised since the last update. */
+  wonders: WonderView[] | null;
   /** Events since the previous update, already rendered to text. */
-  chronicle: { tick: number; text: string; weight: number }[];
+  chronicle: { tick: number; text: string; weight: number; cell?: number }[];
   totalPopulation: number;
   livingPolities: number;
   /** The replay log, sent whenever it has grown so the client can persist it. */
@@ -160,6 +202,7 @@ export function toPolityView(p: Polity, culture: string, religion: string): Poli
     name: p.name,
     alive: p.alive,
     hue: p.hue,
+    capital: p.capital,
     era: p.era,
     tech: p.tech,
     stability: p.stability,

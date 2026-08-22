@@ -27,6 +27,10 @@ let lastSentTick = -1;
 let lastChronicleTick = 0;
 let ownershipDirty = true;
 let ownerSignature = 0;
+/** Last ruin-set version sent, so an unchanged set costs nothing. */
+let lastRuinVersion = -1;
+/** Same, for great works: they are raised a handful of times per world. */
+let lastWonderVersion = -1;
 /** Every policy change, in tick order. This plus the seed is the save file. */
 let policyLog: PolicyChange[] = [];
 let policyLogSent = 0;
@@ -130,13 +134,26 @@ function sendState(): void {
     type: 'state',
     tick: sim.tick,
     territory,
+    owner: territory ? sim.owner.slice() : null,
     settlements: sim.settlements.map((s) => ({
       cell: s.cell,
       tier: s.tier,
       polity: s.polity,
       population: s.population,
       name: s.name,
+      founded: s.founded,
     })),
+    ruins: sim.ruinVersion !== lastRuinVersion ? sim.ruins() : null,
+    wonders:
+      sim.wonderVersion !== lastWonderVersion
+        ? sim.wonderList().map((w) => ({
+            cell: w.cell,
+            kind: w.kind,
+            built: w.built,
+            builderName: w.builderName,
+            name: w.name,
+          }))
+        : null,
     polities: sim.polities
       .filter((p) => p.alive)
       .map((p) =>
@@ -162,7 +179,12 @@ function sendState(): void {
   }
 
   lastSentTick = sim.tick;
-  post(message, territory ? [territory.buffer] : []);
+  lastRuinVersion = sim.ruinVersion;
+  lastWonderVersion = sim.wonderVersion;
+  const transfer: Transferable[] = [];
+  if (territory) transfer.push(territory.buffer);
+  if (message.owner) transfer.push(message.owner.buffer);
+  post(message, transfer);
 }
 
 /**

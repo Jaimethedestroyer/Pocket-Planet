@@ -12,6 +12,7 @@ import { CameraRig } from './render/cameraRig';
 import { createTerrainMaterial, updateTerrainDetail } from './render/materials/terrain';
 import { RenderPipeline } from './render/post/pipeline';
 import { SettlementLayer } from './render/settlements';
+import { GroundDetail } from './render/ground/detail';
 import { SimClient } from './game/simClient';
 import { hashSeed } from './core/rng';
 
@@ -31,6 +32,8 @@ export interface AppOptions {
   bloom?: number;
   /** Cloud coverage, 0 clear to 1 overcast. */
   clouds?: number;
+  /** Multiplier on how far ground detail is built. Zero switches it off. */
+  detail?: number;
 }
 
 export interface ViewState {
@@ -44,6 +47,23 @@ export interface ViewState {
   heading?: number;
   /** Sun angle in degrees; fixes the day/night cycle in place. */
   sun?: number;
+  /**
+   * Extra tilt in radians on top of the automatic altitude-driven tilt.
+   *
+   * Negative levels the camera back towards straight down. That matters more
+   * than it sounds for anything aimed at a *place*: the rig looks along its
+   * heading from above the target, so by the time the automatic tilt has opened
+   * out past half the field of view — which it has by a couple of hundred
+   * metres up — the thing you asked to look at is below the bottom of the
+   * frame, underneath you rather than in front of you.
+   */
+  tilt?: number;
+  /**
+   * Put the given lat/lon in the middle of the frame rather than under the
+   * camera. See CameraRig.framedTarget — anything aimed at a *place* wants
+   * this; a shot of a landscape does not care.
+   */
+  frame?: boolean;
   autoRotate?: boolean;
 }
 
@@ -58,6 +78,7 @@ export class PocketPlanetApp {
   readonly pipeline: RenderPipeline;
   readonly sim: SimClient;
   readonly settlements: SettlementLayer;
+  readonly ground: GroundDetail;
 
   readonly seed: number;
   private quality = QUALITY.high;
@@ -138,9 +159,17 @@ export class PocketPlanetApp {
     this.settlements = new SettlementLayer(this.environment.uniforms);
     this.scene.add(this.settlements.mesh);
 
+    // Ground detail: the buildings, roads, fields and people that the marker
+    // above stands in for from any distance. Its ranges scale with the quality
+    // tier, because it is the first thing worth giving up on a slow phone.
+    this.ground = new GroundDetail(this.environment.uniforms, this.field, this.seed);
+    this.ground.setRangeScale(opts.detail ?? this.quality.detailRange);
+    this.scene.add(this.ground.group);
+
     this.sim.onReady = () => {
       if (this.sim.cellPositions && this.sim.cellHeights) {
         this.settlements.setCellData(this.sim.cellPositions, this.sim.cellHeights);
+        this.ground.setCellData(this.sim.cellPositions);
       }
       this.sim.setSpeed(opts.speed ?? 4);
     };
@@ -204,6 +233,13 @@ export class PocketPlanetApp {
     this.camera.updateMatrixWorld();
     this.terrain.update(this.camera.position, this.projScale());
     this.settlements.setProjScale(this.projScale());
+    this.ground.update(
+      this.camera,
+      this.sim.settlements,
+      this.sim.polities,
+      this.sim.ruins,
+      this.sim.wonders,
+    );
 
     this.pipeline.camAltitude = this.rig.altitude;
     this.pipeline.render(this.scene, this.camera);
@@ -217,7 +253,9 @@ export class PocketPlanetApp {
 
   getStats(): Record<string, number> {
     const t = this.terrain.getStats();
+    const g = this.ground.getStats();
     return {
+      ...g,
       fps: this.fps,
       altitude: this.rig.altitude,
       visiblePatches: t.visiblePatches,
@@ -245,11 +283,13 @@ export class PocketPlanetApp {
     // the last viewpoint says nothing about this one.
     this.terrain.resetBudget();
 
+    let aimed: THREE.Vector3 | null = null;
     if (view.lat !== undefined || view.lon !== undefined) {
       const lat = THREE.MathUtils.degToRad(view.lat ?? 0);
       const lon = THREE.MathUtils.degToRad(view.lon ?? 0);
       const c = Math.cos(lat);
-      this.rig.target.set(c * Math.cos(lon), Math.sin(lat), c * Math.sin(lon));
+      aimed = new THREE.Vector3(c * Math.cos(lon), Math.sin(lat), c * Math.sin(lon));
+      this.rig.target.copy(aimed);
     }
     this.rig.stopMomentum();
 
@@ -264,6 +304,9 @@ export class PocketPlanetApp {
       this.rig.heading = h;
       this.rig.setHeading(h);
     }
+    if (view.tilt !== undefined) {
+      this.rig.tiltOffset = view.tilt;
+    }
     if (view.sun !== undefined) {
       this.environment.setSunAngle(THREE.MathUtils.degToRad(view.sun));
       this.environment.dayLength = Infinity;
@@ -271,6 +314,10 @@ export class PocketPlanetApp {
     if (view.autoRotate !== undefined) {
       this.rig.autoRotate = view.autoRotate;
     }
+
+    // Last, because it needs the altitude, the heading and the tilt to have
+    // been applied already — the offset it computes depends on all three.
+    if (view.frame && aimed) this.rig.frameOn(aimed, this.rig.altitude);
   }
 
   dispose(): void {
@@ -279,6 +326,7 @@ export class PocketPlanetApp {
     window.removeEventListener('resize', this.onResize);
     this.terrain.dispose();
     this.settlements.dispose();
+    this.ground.dispose();
     this.sim.dispose();
     this.pipeline.dispose();
     this.terrainMaterial.dispose();

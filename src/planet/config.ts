@@ -80,6 +80,14 @@ export interface QualitySettings {
   /** Render scale multiplier applied to the device pixel ratio. */
   renderScale: number;
   maxPixelRatio: number;
+  /**
+   * Multiplier on how far out buildings, roads, fields and people are built.
+   *
+   * The cheapest large saving available on a slow device, and the least
+   * damaging: a town half as far away is still a town, whereas half the
+   * atmosphere steps is visible banding across the whole sky.
+   */
+  detailRange: number;
 }
 
 export const QUALITY: Record<QualityTier, QualitySettings> = {
@@ -97,6 +105,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     cloudLightSteps: 2,
     renderScale: 0.85,
     maxPixelRatio: 1.5,
+    detailRange: 0.6,
   },
   medium: {
     tier: 'medium',
@@ -112,6 +121,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     cloudLightSteps: 3,
     renderScale: 1,
     maxPixelRatio: 2,
+    detailRange: 0.85,
   },
   high: {
     tier: 'high',
@@ -127,6 +137,7 @@ export const QUALITY: Record<QualityTier, QualitySettings> = {
     cloudLightSteps: 4,
     renderScale: 1,
     maxPixelRatio: 2,
+    detailRange: 1,
   },
 };
 

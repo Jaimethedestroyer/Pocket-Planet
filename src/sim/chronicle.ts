@@ -77,6 +77,11 @@ const TEMPLATES: Templates = {
   'religion-born': ['{religion} is first preached in {polity}.'],
   'culture-born': ['A new people emerge from the ruins of {polity}: the {culture}.'],
   'golden-age': ['{polity} enters a golden age.'],
+  wonder: [
+    '{place} is completed, after a generation of work, under {polity}.',
+    '{polity} completes {place}. It is meant to outlast them, and it will.',
+    'The last stone of {place} is set. {polity} has spent a treasury on it.',
+  ],
 };
 
 function templateKey(event: SimEvent): string {
@@ -121,6 +126,12 @@ export interface ChronicleLine {
   tick: number;
   text: string;
   weight: number;
+  /**
+   * Where it happened, when the event knows. This is what turns the chronicle
+   * from a ticker into a set of doorways: a line with a place attached can be
+   * tapped, and the camera flies there.
+   */
+  cell?: number;
 }
 
 /** Render the most significant events in a span of history. */
@@ -134,7 +145,13 @@ export function chronicle(
   for (const event of sim.events) {
     if (event.tick < fromTick || event.tick > toTick) continue;
     const text = renderEvent(sim, event);
-    if (text) lines.push({ tick: event.tick, text, weight: event.weight });
+    if (!text) continue;
+    // Events that name a cell carry it through; the rest fall back to whoever
+    // they happened to, so a war still has somewhere to fly to.
+    const cell =
+      event.cell ??
+      (event.polity !== undefined ? sim.polities[event.polity]?.capital : undefined);
+    lines.push({ tick: event.tick, text, weight: event.weight, cell });
   }
   if (lines.length <= limit) return lines;
 

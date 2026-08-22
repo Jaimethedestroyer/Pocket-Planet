@@ -64,6 +64,15 @@ export class Hud {
   private policiesOpen = false;
   private currentSpeed = 4;
 
+  /**
+   * Called when a chronicle line that knows where it happened is tapped.
+   *
+   * This is what turns the feed from a ticker into a set of doorways: the
+   * history scrolling past the bottom of the screen is a list of places, and
+   * every one of them is somewhere you can go and look at.
+   */
+  onGoToCell: ((cell: number) => void) | null = null;
+
   constructor(sim: SimClient) {
     this.sim = sim;
     this.root = document.createElement('div');
@@ -250,7 +259,15 @@ export class Hud {
       const el = document.createElement('div');
       el.className = 'pp-line';
       if (line.weight >= 0.8) el.classList.add('major');
-      el.innerHTML = `<span>${line.tick}</span>${line.text}`;
+      // Text goes in as text, not as markup: place and polity names come from a
+      // generator, and one apostrophe away from being markup is close enough.
+      el.innerHTML = `<span>${line.tick}</span>`;
+      el.appendChild(document.createTextNode(line.text));
+      if (line.cell !== undefined) {
+        el.classList.add('here');
+        const cell = line.cell;
+        el.addEventListener('click', () => this.onGoToCell?.(cell));
+      }
       this.feedEl.appendChild(el);
     }
     this.renderedChronicle = sim.chronicle.length;

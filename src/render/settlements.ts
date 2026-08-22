@@ -20,10 +20,13 @@ attribute float iSize;
 
 uniform float uProjScale;
 uniform float uMinPixels;
+uniform float uHandoffNear;
+uniform float uHandoffFar;
 
 varying vec2 vQuad;
 varying vec3 vColor;
 varying vec3 vCenter;
+varying float vHandoff;
 
 void main() {
   vQuad = position.xy;
@@ -32,6 +35,12 @@ void main() {
 
   vec3 toCamera = cameraPosition - iCenter;
   float dist = length(toCamera);
+
+  // Hand over to the real town. Close in, the marker is a coloured smear over
+  // buildings that are drawing themselves properly, so it gets out of the way —
+  // and by night it hands its glow to the windows, which is where the light was
+  // always supposed to be coming from.
+  vHandoff = smoothstep(uHandoffNear, uHandoffFar, dist);
 
   // Keep a floor on the apparent size: a hamlet seen from orbit should still
   // be one visible pixel rather than nothing at all.
@@ -61,8 +70,10 @@ uniform float uSunIntensity;
 varying vec2 vQuad;
 varying vec3 vColor;
 varying vec3 vCenter;
+varying float vHandoff;
 
 void main() {
+  if (vHandoff < 0.004) discard;
   float r = length(vQuad) * 2.0;
   if (r > 1.0) discard;
 
@@ -90,7 +101,7 @@ void main() {
   float alpha = clamp(
     mix(core * 0.92 + rim * 0.75, core + halo * 0.7, night),
     0.0,
-    1.0);
+    1.0) * vHandoff;
 
   gl_FragColor = vec4(color, alpha);
 }
@@ -140,6 +151,8 @@ export class SettlementLayer {
         uSunIntensity: shared.uSunIntensity,
         uProjScale: { value: 1000 },
         uMinPixels: { value: 3.4 },
+        uHandoffNear: { value: 240 },
+        uHandoffFar: { value: 780 },
       },
       transparent: true,
       depthWrite: false,
@@ -216,6 +229,26 @@ export class SettlementLayer {
 
   setProjScale(value: number): void {
     this.material.uniforms.uProjScale.value = value;
+  }
+
+  /** Where the marker gives way to the built town underneath it. */
+  setHandoff(near: number, far: number): void {
+    this.material.uniforms.uHandoffNear.value = near;
+    this.material.uniforms.uHandoffFar.value = far;
+  }
+
+  /** World position of a settlement's marker, for picking and for the camera. */
+  positionOf(cell: number, out: THREE.Vector3): THREE.Vector3 | null {
+    if (!this.cellPositions || !this.cellHeights) return null;
+    if (cell < 0 || cell * 3 + 2 >= this.cellPositions.length) return null;
+    const r = PLANET_RADIUS + Math.max(0, this.cellHeights[cell]);
+    return out
+      .set(
+        this.cellPositions[cell * 3],
+        this.cellPositions[cell * 3 + 1],
+        this.cellPositions[cell * 3 + 2],
+      )
+      .multiplyScalar(r);
   }
 
   dispose(): void {

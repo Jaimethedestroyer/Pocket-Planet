@@ -68,6 +68,7 @@ export type EventKind =
   | 'schism'
   | 'culture-born'
   | 'resettled'
+  | 'wonder'
   | 'golden-age';
 
 /**
@@ -114,6 +115,27 @@ export interface Religion {
   tolerance: number;
   fervour: number;
   seed: number;
+}
+
+/**
+ * A great work.
+ *
+ * Deliberately owned by the *cell*, not by the settlement or the state that
+ * paid for it. That is the whole point of a wonder: it outlives both. A city
+ * that empties leaves its ziggurat standing over the ruins, and a resettlement
+ * nine centuries later inherits it — which is exactly the kind of thing a
+ * player should be able to find and wonder about.
+ */
+export interface Wonder {
+  cell: number;
+  /** Index into the era's catalogue; the renderer maps it to a model. */
+  kind: string;
+  built: number;
+  /** Who built it. May be long dead. */
+  builder: number;
+  /** The polity's name at the time, kept because the polity may be gone. */
+  builderName: string;
+  name: string;
 }
 
 export interface Settlement {
