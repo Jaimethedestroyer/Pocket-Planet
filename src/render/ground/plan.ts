@@ -13,6 +13,34 @@
  * settlements are frontage on a route. Laying the route first and hanging
  * buildings off it gets terraces, corners and squares for free.
  *
+ * The work is split three ways. `layout.ts` draws the street network and hands
+ * out plots along it, in flat metres, knowing nothing about the terrain or the
+ * settlement's size. `plot.ts` holds the footprint arithmetic. This file is the
+ * half that touches the ground: it puts that layout on real terrain, decides
+ * how much of it is standing, and produces the fields and the people.
+ *
+ * Three properties the result has to hold, and each of them cost a rewrite to
+ * get:
+ *
+ * **Growth is additive.** The plan is seeded from the *cell alone*. It used to
+ * carry the tier, so the moment a village became a town every street moved and
+ * every building was redrawn somewhere else — which is what the "a whole
+ * quarter vanishes and a different one appears" pop-in actually was. Now the
+ * layout is drawn once, at the largest size the town could ever reach, and the
+ * tier only decides how much of it is standing. Nothing that exists at tier 2
+ * moves at tier 3; there is simply more of it. `tools/probe-town.ts` asserts
+ * that, because no single screenshot can show it.
+ *
+ * **Buildings are rectangles.** Plots are allocated as runs of frontage and
+ * tested against each other with a separating-axis test on rotated rectangles
+ * (see `plot.ts`), not as circles around their centres. That is what lets the
+ * margins be small without walls passing through walls.
+ *
+ * **The terrain shapes the streets.** A street holds an elevation where it can,
+ * and slides laterally onto its contour where the ground falls away — weighted
+ * so that a street already running down the fall line is left to climb, because
+ * that is what the streets of a hill town actually do.
+ *
  * Everything is planned in a local tangent frame in metres, then lifted onto
  * the sphere at the end. A town is at most two hundred metres across on a
  * planet with a one-kilometre radius, which is a fifth of a radian — small
@@ -23,13 +51,17 @@
 import * as THREE from 'three';
 import { PLANET_RADIUS } from '../../planet/config';
 import { Era } from '../../sim/types';
-import { makeRng, mixSeed } from '../../core/rng';
+import { Stream, makeRng, mixSeed } from '../../core/rng';
 import type { Rng } from '../../core/rng';
 import type { PlanetField } from '../../planet/heightfield';
 import { archetypes } from './archetypes';
 import type { ArchetypeName } from './archetypes';
-import { pickWeighted, samplePalette, townStyle } from './style';
-import type { Rgb, TownStyle } from './style';
+import { samplePalette, townStyle } from './style';
+import type { Rgb } from './style';
+import { Occupancy, footprint } from './plot';
+import type { Local } from './plot';
+import { NEIGHBOUR_GAP, allocatePlots, densify, lerp, planStreets } from './layout';
+import type { Plot, Street } from './layout';
 
 /** One building, ready to become an instance. */
 export interface Placement {
@@ -55,6 +87,35 @@ export interface RoadPath {
   points: THREE.Vector3[];
   width: number;
   /** 0 track, 1 street, 2 highway. Drives wear and centre markings. */
+  grade: number;
+  /**
+   * How far out this road is drawn, as a multiple of the road layer's range.
+   *
+   * Roads are the first ground detail to appear on a descent because a road
+   * reads from far higher than the buildings beside it — but that is only true
+   * of a *route*. A back lane between two rows of houses is three metres wide
+   * and, from six hundred metres up, contributes nothing but a pale thread, and
+   * a region full of them reads as haze rather than as settlement. So the
+   * ranges are nested inside the layer's own range, in the same spirit as the
+   * layers are nested inside each other.
+   */
+  reach?: number;
+}
+
+/**
+ * An open paved space, as a draped fan.
+ *
+ * Where several streets converge the ribbons used to simply overlap, and the
+ * result was an undifferentiated slab whose shape was an accident of how many
+ * roads happened to meet. A square is a piece of geometry with a boundary: the
+ * civic building and the great work stand *on* it, and the streets run into it
+ * rather than through each other.
+ */
+export interface Plaza {
+  centre: THREE.Vector3;
+  /** Rim points in order, closed implicitly. */
+  rim: THREE.Vector3[];
+  /** As for a road: 0 is beaten earth, 2 is paved. */
   grade: number;
 }
 
@@ -95,6 +156,7 @@ export interface TownPlan {
   radius: number;
   buildings: Placement[];
   roads: RoadPath[];
+  plazas: Plaza[];
   props: PropPlacement[];
   people: PersonPlacement[];
 }
@@ -136,9 +198,13 @@ export function signatureOf(req: TownRequest): string {
 /** Built radius and building count per tier, from hamlet to metropolis. */
 const TIER_RADIUS = [26, 36, 50, 68, 92, 120];
 const TIER_BUILDINGS = [7, 14, 28, 52, 92, 160];
+const MAX_TIER = TIER_RADIUS.length - 1;
 
 /** Vertex spacing to sample the terrain at. Fine: buildings sit on the detail. */
 const SAMPLE_SPACING = 0.5;
+
+/** How far a street may slide sideways to hold its contour, in metres. */
+const MAX_CONTOUR_SHIFT = 5;
 
 /**
  * The shader's tangent basis at a point, reproduced exactly.
@@ -154,207 +220,6 @@ function basisAt(up: THREE.Vector3, east: THREE.Vector3, north: THREE.Vector3): 
   else east.set(1, 0, 0);
   east.cross(up).normalize();
   north.crossVectors(up, east);
-}
-
-/** A 2D point in the town's local frame, in metres. */
-interface Local {
-  a: number;
-  b: number;
-}
-
-interface Street {
-  points: Local[];
-  width: number;
-  grade: number;
-  /** Whether buildings may front onto it. */
-  frontage: boolean;
-}
-
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
-
-/** Resample a polyline so its points are at most `step` apart. */
-function densify(points: Local[], step: number): Local[] {
-  const out: Local[] = [];
-  for (let i = 0; i < points.length - 1; i++) {
-    const p = points[i];
-    const q = points[i + 1];
-    const d = Math.hypot(q.a - p.a, q.b - p.b);
-    const n = Math.max(1, Math.ceil(d / step));
-    for (let k = 0; k < n; k++) {
-      out.push({ a: lerp(p.a, q.a, k / n), b: lerp(p.b, q.b, k / n) });
-    }
-  }
-  out.push(points[points.length - 1]);
-  return out;
-}
-
-/**
- * A wandering line between two points.
- *
- * The lateral offset is a half sine over the length, so the curve leaves and
- * arrives on its endpoints' own bearing. A random walk instead gives a road
- * that visibly kinks at every sample, which is the difference between an old
- * road and a badly generated one.
- */
-function wander(
-  from: Local,
-  to: Local,
-  bend: number,
-  segments: number,
-  rng: Rng,
-): Local[] {
-  const dx = to.a - from.a;
-  const dy = to.b - from.b;
-  const len = Math.hypot(dx, dy) || 1;
-  const nx = -dy / len;
-  const ny = dx / len;
-  const amp1 = rng.range(-bend, bend);
-  const amp2 = rng.range(-bend, bend) * 0.5;
-  const out: Local[] = [];
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments;
-    const off = Math.sin(t * Math.PI) * amp1 + Math.sin(t * Math.PI * 2) * amp2;
-    out.push({ a: from.a + dx * t + nx * off, b: from.b + dy * t + ny * off });
-  }
-  return out;
-}
-
-function clipToDisc(points: Local[], radius: number): Local[] {
-  const out: Local[] = [];
-  for (const p of points) {
-    if (Math.hypot(p.a, p.b) <= radius) out.push(p);
-    else if (out.length > 1) break;
-    else out.length = 0;
-  }
-  return out;
-}
-
-/** Build the street network for one town. */
-function planStreets(style: TownStyle, radius: number, tier: number, rng: Rng): Street[] {
-  const streets: Street[] = [];
-  const main = style.roadWidth;
-  const lane = main * 0.72;
-  const turn = rng.next() * Math.PI * 2;
-
-  const rotate = (p: Local, angle: number): Local => ({
-    a: p.a * Math.cos(angle) - p.b * Math.sin(angle),
-    b: p.a * Math.sin(angle) + p.b * Math.cos(angle),
-  });
-
-  if (style.layout === 'cluster') {
-    // No streets, only tracks radiating from the common ground.
-    const spokes = 3 + Math.min(3, tier);
-    for (let i = 0; i < spokes; i++) {
-      const a = turn + (i / spokes) * Math.PI * 2 + rng.range(-0.3, 0.3);
-      const len = radius * rng.range(0.75, 1.15);
-      streets.push({
-        points: wander(
-          { a: Math.cos(a) * radius * 0.16, b: Math.sin(a) * radius * 0.16 },
-          { a: Math.cos(a) * len, b: Math.sin(a) * len },
-          radius * 0.1,
-          5,
-          rng,
-        ),
-        width: main,
-        grade: 0,
-        frontage: true,
-      });
-    }
-    // The ring of dwellings faces inwards onto the common, which is what makes
-    // a cluster of huts read as a village rather than as scattered huts.
-    const ring: Local[] = [];
-    const rr = radius * 0.38;
-    for (let i = 0; i <= 20; i++) {
-      const a = (i / 20) * Math.PI * 2;
-      ring.push({ a: Math.cos(a) * rr, b: Math.sin(a) * rr });
-    }
-    streets.push({ points: ring, width: main * 0.8, grade: 0, frontage: true });
-    return streets;
-  }
-
-  if (style.layout === 'grid' || style.layout === 'avenue') {
-    // Blocks scale with the town. A fixed block size gives a metropolis a
-    // sensible grid and a hamlet a single crossroads with nowhere to build.
-    const ideal = style.layout === 'avenue' ? 32 : 26;
-    const block = Math.min(ideal, Math.max(15, radius / 2.4));
-    const n = Math.ceil(radius / block);
-    for (let i = -n; i <= n; i++) {
-      const off = i * block + rng.range(-2, 2);
-      const half = Math.sqrt(Math.max(0, radius * radius - off * off));
-      if (half < 12) continue;
-      const wide = i === 0 ? main * 1.5 : main;
-      streets.push({
-        points: clipToDisc(
-          densify([{ a: -half, b: off }, { a: half, b: off }], 10).map((p) => rotate(p, turn)),
-          radius,
-        ),
-        width: wide,
-        grade: i === 0 ? 2 : 1,
-        frontage: true,
-      });
-      streets.push({
-        points: clipToDisc(
-          densify([{ a: off, b: -half }, { a: off, b: half }], 10).map((p) => rotate(p, turn)),
-          radius,
-        ),
-        width: i === 0 ? main * 1.2 : lane,
-        grade: 1,
-        frontage: true,
-      });
-    }
-    return streets.filter((s) => s.points.length > 2);
-  }
-
-  // Organic: one route through, lanes hanging off it, and a ring once the town
-  // is big enough to have needed a wall.
-  const spine = wander(
-    rotate({ a: -radius * 1.05, b: 0 }, turn),
-    rotate({ a: radius * 1.05, b: 0 }, turn),
-    radius * 0.22,
-    9,
-    rng,
-  );
-  streets.push({ points: densify(spine, 9), width: main, grade: 1, frontage: true });
-
-  const cross = wander(
-    rotate({ a: 0, b: -radius * 0.95 }, turn + rng.range(-0.4, 0.4)),
-    rotate({ a: 0, b: radius * 0.95 }, turn + rng.range(-0.4, 0.4)),
-    radius * 0.2,
-    7,
-    rng,
-  );
-  streets.push({ points: densify(cross, 9), width: main * 0.9, grade: 1, frontage: true });
-
-  const lanes = 2 + tier * 2;
-  for (let i = 0; i < lanes; i++) {
-    const host = streets[rng.int(0, streets.length)];
-    const at = host.points[rng.int(1, host.points.length - 1)];
-    const angle = rng.next() * Math.PI * 2;
-    const len = radius * rng.range(0.3, 0.7);
-    const end = { a: at.a + Math.cos(angle) * len, b: at.b + Math.sin(angle) * len };
-    if (Math.hypot(end.a, end.b) > radius) continue;
-    streets.push({
-      points: densify(wander(at, end, radius * 0.12, 5, rng), 8),
-      width: lane,
-      grade: 1,
-      frontage: true,
-    });
-  }
-
-  if (tier >= 3) {
-    const ring: Local[] = [];
-    const rr = radius * 0.78;
-    for (let i = 0; i <= 24; i++) {
-      const a = (i / 24) * Math.PI * 2;
-      const r = rr * (1 + Math.sin(a * 3 + turn) * 0.07);
-      ring.push({ a: Math.cos(a) * r, b: Math.sin(a) * r });
-    }
-    streets.push({ points: ring, width: lane, grade: 1, frontage: true });
-  }
-
-  return streets;
 }
 
 /** Scratch state shared across one plan, so nothing allocates per candidate. */
@@ -395,27 +260,58 @@ class Site {
   }
 }
 
-interface Occupied {
-  a: number;
-  b: number;
-  r: number;
+/**
+ * How far sideways a point should move to sit on a target elevation.
+ *
+ * Two samples, either side of the street. The naive answer is
+ * `(target - here) / gradient`, which is right when the ground falls away
+ * across the street — the street is running along a contour and can slide onto
+ * it — and explodes when it does not, because then the lateral direction *is*
+ * the contour and no sideways movement changes anything. Damping the divide
+ * turns that singularity into exactly the behaviour wanted: a street running
+ * across the slope is pulled onto its contour, and a street running down the
+ * fall line is left alone to climb, which is what the streets of a hill town
+ * genuinely do.
+ */
+function contourShift(
+  site: Site,
+  a: number,
+  b: number,
+  ta: number,
+  tb: number,
+  target: number,
+): number {
+  const na = -tb;
+  const nb = ta;
+  const probe = 5;
+  const hp = site.height(a + na * probe, b + nb * probe);
+  const hm = site.height(a - na * probe, b - nb * probe);
+  const grad = (hp - hm) / (2 * probe);
+  const here = (hp + hm) * 0.5;
+  const shift = ((target - here) * grad) / (grad * grad + 0.02);
+  return Math.max(-MAX_CONTOUR_SHIFT, Math.min(MAX_CONTOUR_SHIFT, shift)) * 0.75;
 }
 
 /**
  * Plan one town.
  *
- * Cost is dominated by terrain sampling — three samples per candidate building
- * plus one per road point — so it is measured and budgeted by the caller rather
- * than run for every settlement every frame.
+ * Cost is dominated by terrain sampling — two samples per street point for the
+ * contour, one per road vertex for the drape, three per building — so it is
+ * measured and budgeted by the caller rather than run for every settlement
+ * every frame.
  */
 export function planTown(req: TownRequest, field: PlanetField, worldSeed: number): TownPlan {
   const models = archetypes();
   const style = townStyle(req.era, req.culture);
-  const rng = makeRng(mixSeed(worldSeed, req.cell * 7919 + req.era * 31 + req.tier));
+  // The cell, and nothing else. Not the tier — that is what used to move every
+  // building in the town the moment it grew — and not the era, so that a town
+  // rebuilding itself in a new material rebuilds on its own streets.
+  const geomSeed = mixSeed(worldSeed, req.cell * 7919);
+  const rng = makeRng(geomSeed);
 
-  const tier = Math.min(TIER_RADIUS.length - 1, Math.max(0, req.tier));
+  const tier = Math.min(MAX_TIER, Math.max(0, req.tier));
   const radius = TIER_RADIUS[tier] * style.spread;
-  const wanted = Math.round(TIER_BUILDINGS[tier] * (req.capital ? 1.18 : 1));
+  const full = TIER_RADIUS[MAX_TIER] * style.spread;
 
   /**
    * The built radius in a given direction.
@@ -428,10 +324,11 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
    */
   const lobeA = rng.next() * Math.PI * 2;
   const lobeB = rng.next() * Math.PI * 2;
-  const radiusAt = (a: number, b: number): number => {
+  const lobe = (a: number, b: number): number => {
     const theta = Math.atan2(b, a);
-    return radius * (1 + 0.2 * Math.sin(theta * 2 + lobeA) + 0.12 * Math.sin(theta * 3 + lobeB));
+    return 1 + 0.2 * Math.sin(theta * 2 + lobeA) + 0.12 * Math.sin(theta * 3 + lobeB);
   };
+  const radiusAt = (a: number, b: number): number => radius * lobe(a, b);
 
   const centreDir = req.unit.clone().normalize();
   const centreHeight = field.height(centreDir.x, centreDir.y, centreDir.z, SAMPLE_SPACING);
@@ -440,24 +337,15 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
 
   const buildings: Placement[] = [];
   const roads: RoadPath[] = [];
+  const plazas: Plaza[] = [];
   const props: PropPlacement[] = [];
   const people: PersonPlacement[] = [];
-  const taken: Occupied[] = [];
+  const taken = new Occupancy(26);
 
   const scratch = new THREE.Vector3();
   const facing = new THREE.Vector3();
   const bEast = new THREE.Vector3();
   const bNorth = new THREE.Vector3();
-
-  const free = (a: number, b: number, r: number): boolean => {
-    for (let i = 0; i < taken.length; i++) {
-      const o = taken[i];
-      const dx = o.a - a;
-      const dy = o.b - b;
-      if (dx * dx + dy * dy < (o.r + r) * (o.r + r)) return false;
-    }
-    return true;
-  };
 
   /**
    * Try to put one building down.
@@ -481,11 +369,20 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
     facingA: number,
     facingB: number,
     scale: number,
-    forced = false,
+    prng: Rng,
+    // 'normal' tests against everything already standing. 'planned' skips that
+    // test because the master plan already resolved this building against its
+    // neighbours — repeating it here would let a building vanish when the one
+    // beside it is finally built, which is the pop-in this file exists to
+    // avoid. 'forced' is the great work: it goes where it goes.
+    mode: 'normal' | 'planned' | 'forced' = 'normal',
   ): boolean => {
     const model = models[name];
-    const half = Math.max(model.width, model.depth) * 0.5 * scale;
-    if (!forced && !free(a, b, half * 0.78)) return false;
+    const fl = Math.hypot(facingA, facingB) || 1;
+    const fa = facingA / fl;
+    const fb = facingB / fl;
+    const foot = footprint(a, b, model.width * scale, model.depth * scale, fa, fb);
+    if (mode === 'normal' && !taken.free(foot, NEIGHBOUR_GAP)) return false;
 
     const h0 = site.height(a, b);
     // Freeboard, not merely "above sea level". The sea is not a plane: it has
@@ -495,15 +392,15 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
     // it looks flooded — a scatter of roofs across a tidal flat with surf
     // breaking between the houses.
     if (h0 < 1.8) return false;
-    const probe = Math.max(3, half);
+    const probe = Math.max(3, foot.br);
     const hA = site.height(a + probe, b);
     const hB = site.height(a, b + probe);
     const slope = Math.hypot(hA - h0, hB - h0) / probe;
-    if (!forced && slope > 0.38) return false;
+    if (mode !== 'forced' && slope > 0.38) return false;
     if (slope > 0.62) return false;
 
     // Bury the base deep enough that the downhill corner still meets ground.
-    const sink = 0.28 + slope * half * 1.25;
+    const sink = 0.28 + slope * foot.br * 1.25;
     const dir = site.direction(a, b, scratch);
     const origin = dir.clone().multiplyScalar(PLANET_RADIUS + h0 - sink);
 
@@ -511,29 +408,43 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
     basisAt(up, bEast, bNorth);
     facing
       .copy(site.east)
-      .multiplyScalar(facingA)
-      .addScaledVector(site.north, facingB)
+      .multiplyScalar(fa)
+      .addScaledVector(site.north, fb)
       .normalize();
     const rot = Math.atan2(-facing.dot(bEast), facing.dot(bNorth));
 
-    const shade = rng.next();
-    const jitter = rng.range(-0.06, 0.06);
+    const shade = prng.next();
+    const jitter = prng.range(-0.06, 0.06);
     buildings.push({
       archetype: name,
       origin,
       rot,
       scale: new THREE.Vector3(
-        scale * rng.range(0.95, 1.06),
-        scale * rng.range(0.94, 1.12),
-        scale * rng.range(0.95, 1.06),
+        scale,
+        scale * prng.range(0.94, 1.12),
+        scale,
       ),
       wall: samplePalette(style.wallA, style.wallB, shade, jitter),
-      roof: samplePalette(style.roofA, style.roofB, rng.next(), jitter * 0.5),
-      style: style.courses * rng.range(0.8, 1.15),
+      roof: samplePalette(style.roofA, style.roofB, prng.next(), jitter * 0.5),
+      style: style.courses * prng.range(0.8, 1.15),
     });
-    taken.push({ a, b, r: half * 0.82 });
+    taken.add(foot);
     return true;
   };
+
+  const finish = (): TownPlan => ({
+    cell: req.cell,
+    tier: req.tier,
+    era: req.era,
+    signature: signatureOf(req),
+    centre,
+    radius,
+    buildings,
+    roads,
+    plazas,
+    props,
+    people,
+  });
 
   // --- Ruins: nothing standing, only what the weather has not taken --------
 
@@ -542,7 +453,7 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
     // below, but standing, and at full size — that is the whole point of it.
     if (req.wonder) {
       const angle = rng.next() * Math.PI * 2;
-      place(req.wonder, 0, 0, Math.cos(angle), Math.sin(angle), 1, true);
+      place(req.wonder, 0, 0, Math.cos(angle), Math.sin(angle), 1, rng, 'forced');
     }
     const count = 4 + tier * 3;
     for (let i = 0; i < count; i++) {
@@ -555,6 +466,7 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
         Math.cos(angle + 1.2),
         Math.sin(angle + 1.2),
         rng.range(0.8, 1.3),
+        rng,
       );
     }
     for (const b of buildings) {
@@ -562,159 +474,367 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
       b.wall = [b.wall[0] * 0.72 + 0.06, b.wall[1] * 0.74 + 0.07, b.wall[2] * 0.7 + 0.06];
       b.roof = b.wall;
     }
-    return {
-      cell: req.cell,
-      tier: req.tier,
-      era: req.era,
-      signature: signatureOf(req),
-      centre,
-      radius,
-      buildings,
-      roads,
-      props,
-      people,
-    };
+    return finish();
   }
 
   // --- Streets ------------------------------------------------------------
 
-  const streets = planStreets(style, radius, tier, rng);
+  // How far out anything is drawn. A little past the built radius, so the
+  // roads leave town rather than stopping at the last house.
+  const emit = radius * 1.16;
 
+  /**
+   * Everything this town can possibly touch, in metres.
+   *
+   * One number, because three separate almost-right thresholds is how a
+   * building ends up interpolating a contour that was never computed. It has to
+   * cover the furthest road drawn, the furthest plot allocated (the built
+   * radius at its widest lobe, plus the deepest setback), and the street points
+   * bracketing that plot, which can be another segment further out again.
+   */
+  const window = radius * 1.5 + 40;
+
+  const streets = planStreets(style, full, window, rng);
+
+  /**
+   * Is this site steep enough for the contour pass to be worth paying for?
+   *
+   * Six probes, against about two per street point over the whole built area —
+   * and most settlements are on gentle ground, because that is where the
+   * simulation puts them. On a site with four metres of relief across the whole
+   * town every shift comes out under a metre and nothing about the streets
+   * reads differently, so the cheapest correct answer is not to look.
+   *
+   * Measured across the town's *ultimate* radius, never its current one. A town
+   * judged flat at one size and hilly at the next would move every street it
+   * already had, which is exactly the thing this file exists to prevent.
+   */
+  let relief = 0;
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    const r = full * (i % 2 === 0 ? 0.5 : 0.95);
+    relief = Math.max(relief, Math.abs(site.height(Math.cos(a) * r, Math.sin(a) * r) - centreHeight));
+  }
+  const contoured = relief > 5;
+
+  // Put each street on its contour, but only over the stretch that will
+  // actually be drawn: sampling the whole ultimate network for a hamlet would
+  // cost four times what the hamlet does.
+  for (const street of contoured ? streets : []) {
+    const pts = street.points;
+    if (pts.length < 3) continue;
+    // The elevation the street holds to: the terrain at the point of the
+    // street nearest the town centre. Chosen by index, so it does not move as
+    // the town grows.
+    let best = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const d = pts[i].a * pts[i].a + pts[i].b * pts[i].b;
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    const target = site.height(pts[best].a, pts[best].b);
+    for (let i = 1; i < pts.length - 1; i++) {
+      const p = pts[i];
+      if (Math.hypot(p.a, p.b) > window) continue;
+      const prev = pts[i - 1];
+      const next = pts[i + 1];
+      const dx = next.a - prev.a;
+      const dy = next.b - prev.b;
+      const len = Math.hypot(dx, dy) || 1;
+      street.shift[i] = contourShift(site, p.a, p.b, dx / len, dy / len, target);
+    }
+  }
+
+  /** A street point, contour-shifted. */
+  const shifted = (street: Street, i: number, out: Local): Local => {
+    const pts = street.points;
+    const p = pts[i];
+    const s = street.shift[i];
+    if (s === 0) {
+      out.a = p.a;
+      out.b = p.b;
+      return out;
+    }
+    const prev = pts[Math.max(0, i - 1)];
+    const next = pts[Math.min(pts.length - 1, i + 1)];
+    const dx = next.a - prev.a;
+    const dy = next.b - prev.b;
+    const len = Math.hypot(dx, dy) || 1;
+    out.a = p.a + (-dy / len) * s;
+    out.b = p.b + (dx / len) * s;
+    return out;
+  };
+
+  /** The lateral offset a plot inherits from the street it fronts onto. */
+  const shiftAt = (street: Street, arc: number): number => {
+    const table = street.arc;
+    let lo = 0;
+    let hi = table.length - 1;
+    while (lo + 1 < hi) {
+      const mid = (lo + hi) >> 1;
+      if (table[mid] <= arc) lo = mid;
+      else hi = mid;
+    }
+    const span = table[hi] - table[lo] || 1;
+    const t = (arc - table[lo]) / span;
+    return lerp(street.shift[lo], street.shift[hi], t);
+  };
+
+  const scratchLocal: Local = { a: 0, b: 0 };
   for (const street of streets) {
     if (street.points.length < 2) continue;
-    // Streets are planned on a flat disc and the disc does not know where the
-    // sea is. A coastal town's grid runs straight off the beach otherwise —
-    // and takes the people walking on it with it, which is how this was found.
-    // Cut the polyline at the waterline instead of clamping it: a road that
-    // stops at the shore is right, and one that hugs the waterline is not.
+    // Clip to what this town has actually grown to, then drape. Streets are
+    // planned on a flat disc and the disc does not know where the sea is: a
+    // coastal town's grid runs straight off the beach otherwise — and takes the
+    // people walking on it with it, which is how this was found. Cut the
+    // polyline at the waterline instead of clamping it: a road that stops at
+    // the shore is right, and one that hugs the waterline is not.
     let run: THREE.Vector3[] = [];
     const flush = (): void => {
-      if (run.length >= 2) roads.push({ points: run, width: street.width, grade: street.grade });
+      if (run.length >= 2) {
+        roads.push({
+          points: run,
+          width: street.width,
+          grade: street.grade,
+          reach: street.reach,
+        });
+      }
       run = [];
     };
-    for (const p of densify(street.points, 6)) {
-      const v = new THREE.Vector3();
-      const h = site.world(p.a, p.b, 0, v);
-      if (h < 1.5) flush();
-      else run.push(v);
+    const line: Local[] = [];
+    for (let i = 0; i < street.points.length; i++) {
+      const p = street.points[i];
+      if (Math.hypot(p.a, p.b) > emit) {
+        if (line.length >= 2) {
+          for (const q of densify(line, 6)) {
+            const v = new THREE.Vector3();
+            if (site.world(q.a, q.b, 0, v) < 1.5) flush();
+            else run.push(v);
+          }
+        }
+        flush();
+        line.length = 0;
+        continue;
+      }
+      const s = shifted(street, i, scratchLocal);
+      line.push({ a: s.a, b: s.b });
+    }
+    if (line.length >= 2) {
+      for (const q of densify(line, 6)) {
+        const v = new THREE.Vector3();
+        if (site.world(q.a, q.b, 0, v) < 1.5) flush();
+        else run.push(v);
+      }
     }
     flush();
   }
 
-  // --- The centre: civic buildings and the great work ----------------------
+  // --- The centre: a square, the civic buildings and the great work ---------
+  //
+  // Everything here is *chosen* unconditionally and *built* conditionally. The
+  // choices come off one stream in a fixed order, and each building draws its
+  // own detail from its own seed, so a town that grows large enough to raise a
+  // cathedral does not thereby shift which civic hall it built four hundred
+  // years earlier — and the space both of them stand on is kept clear from the
+  // start, at every tier, so growing into them displaces nothing.
+
+  const centreRng = makeRng(mixSeed(geomSeed, 4409));
+  const monument = style.monuments[centreRng.int(0, style.monuments.length)];
+  // A lighthouse is a navigation *tower*, which is an ancient invention and
+  // later. A primitive fishing village wanting a light on the headland lights a
+  // fire on it; it does not build the Pharos.
+  const canLight = req.coastal && req.era >= Era.Ancient;
+  const wantsLight = centreRng.chance(0.35);
+  const monumentAngle = centreRng.next() * Math.PI * 2;
+  const monumentName = req.wonder ?? (canLight && wantsLight ? 'lighthouse' : monument);
+
+  const civicName = style.civic[centreRng.int(0, style.civic.length)];
+  const civicAngle = centreRng.next() * Math.PI * 2;
+  const plazaWobble = centreRng.next() * Math.PI * 2;
+
+  /**
+   * The open ground at the centre, in metres.
+   *
+   * Deliberately modest and deliberately free of the tier: it is the exclusion
+   * the master plan is built around, and anything here that changed as the town
+   * grew would move houses that are already standing.
+   */
+  const courtRadius = Math.max(style.roadWidth * 1.8, 6);
+  const civicRadius = courtRadius + models[civicName].depth * 0.5 + 1.5;
+
+  /** The ground the centre reserves, whether or not it is standing on it yet. */
+  const reserve = (occupancy: Occupancy): void => {
+    const m = models[monumentName];
+    occupancy.add(
+      footprint(
+        0,
+        0,
+        Math.max(m.width, courtRadius * 2),
+        Math.max(m.depth, courtRadius * 2),
+        Math.cos(monumentAngle),
+        Math.sin(monumentAngle),
+      ),
+    );
+    const c = models[civicName];
+    occupancy.add(
+      footprint(
+        Math.cos(civicAngle) * civicRadius,
+        Math.sin(civicAngle) * civicRadius,
+        c.width,
+        c.depth,
+        -Math.cos(civicAngle),
+        -Math.sin(civicAngle),
+      ),
+    );
+  };
+  reserve(taken);
 
   let centreClear = 0;
   if (req.wonder || tier >= 4 || req.capital) {
     // A real great work if the simulation raised one here; otherwise a large
     // town still builds *something* for itself, it just is not history.
-    const monument = style.monuments[rng.int(0, style.monuments.length)];
-    const chosen =
-      req.wonder ?? (req.coastal && rng.chance(0.35) ? 'lighthouse' : monument);
-    const model = models[chosen];
-    const angle = rng.next() * Math.PI * 2;
-    if (place(chosen, 0, 0, Math.cos(angle), Math.sin(angle), 1, true)) {
-      centreClear = Math.max(model.width, model.depth) * 0.75;
-      taken[taken.length - 1].r = centreClear;
-    }
-  }
-  if (tier >= 2) {
-    const civic = style.civic[rng.int(0, style.civic.length)];
-    const r = centreClear + 14;
-    const angle = rng.next() * Math.PI * 2;
     place(
-      civic,
-      Math.cos(angle) * r,
-      Math.sin(angle) * r,
-      -Math.cos(angle),
-      -Math.sin(angle),
+      monumentName,
+      0,
+      0,
+      Math.cos(monumentAngle),
+      Math.sin(monumentAngle),
       1,
-      false,
+      makeRng(mixSeed(geomSeed, 4410)),
+      'forced',
+    );
+    const m = models[monumentName];
+    centreClear = Math.max(m.width, m.depth) * 0.75;
+  }
+
+  if (tier >= 2) {
+    // The civic building stands on the edge of the square, facing in.
+    place(
+      civicName,
+      Math.cos(civicAngle) * civicRadius,
+      Math.sin(civicAngle) * civicRadius,
+      -Math.cos(civicAngle),
+      -Math.sin(civicAngle),
+      1,
+      makeRng(mixSeed(geomSeed, 4411)),
+      'forced',
     );
   }
 
-  // --- Frontage: buildings hung off the streets ----------------------------
+  // The square itself: the court, widened to hold whatever ended up standing in
+  // the middle of it, and to give the streets somewhere to arrive.
+  const plazaRadius = Math.min(
+    Math.max(courtRadius, centreClear + 5),
+    Math.max(courtRadius, radius * 0.55),
+  );
+  {
+    const rim: THREE.Vector3[] = [];
+    const segments = 18;
+    let dry = true;
+    const centreWorld = new THREE.Vector3();
+    site.world(0, 0, 0, centreWorld);
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      // Not a disc: a square is bounded by whatever was built around it.
+      const r = plazaRadius * (1 + 0.14 * Math.sin(a * 2 + plazaWobble) + 0.07 * Math.sin(a * 5));
+      const v = new THREE.Vector3();
+      if (site.world(Math.cos(a) * r, Math.sin(a) * r, 0, v) < 1.5) dry = false;
+      rim.push(v);
+    }
+    // A primitive common is beaten earth; anything later has paved it.
+    if (dry) plazas.push({ centre: centreWorld, rim, grade: req.era === Era.Primitive ? 0 : 2 });
+  }
 
-  const order: { street: Street; index: number; side: number }[] = [];
-  for (const street of streets) {
-    if (!street.frontage) continue;
-    const dense = densify(street.points, style.frontage * 0.55);
-    street.points = dense;
-    for (let i = 1; i < dense.length - 1; i++) {
-      for (const side of [-1, 1]) order.push({ street, index: i, side });
+  // --- Frontage: which of the town's plots are standing yet -----------------
+
+  // The furthest out a building can stand: the built radius at its widest lobe,
+  // with a little slack. Everything past it is layout that this town has not
+  // grown into yet.
+  const reach = radius * 1.33;
+  const plots = allocatePlots(streets, style, models, full, reach, geomSeed);
+  // Slide each plot onto its street's contour *before* resolving the plan, so
+  // that what the collision pass sees is where the building actually ends up.
+  // The shift costs nothing here — the terrain was sampled once for the street
+  // and every plot along it interpolates that — and doing it afterwards would
+  // mean neighbours resolved against positions neither of them occupies.
+  for (const plot of plots) {
+    const shift = shiftAt(streets[plot.street], plot.arc);
+    if (shift !== 0) {
+      plot.a += plot.la * shift;
+      plot.b += plot.lb * shift;
+      plot.dist = Math.hypot(plot.a, plot.b);
     }
   }
-  // Shuffle so a town that runs out of budget is thinned everywhere rather than
-  // built completely along the first street and not at all along the last.
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = rng.int(0, i + 1);
-    [order[i], order[j]] = [order[j], order[i]];
+  // Nearest first, which is stable and puts the collision resolution where the
+  // town is densest. This order does not depend on the tier, so the set of
+  // plots that survive collision is the same at every size — growth reveals
+  // more of one fixed master plan rather than drawing a new one.
+  plots.sort((p, q) => p.dist - q.dist || p.seed - q.seed);
+
+  const survivors: Plot[] = [];
+  const master = new Occupancy(26);
+  reserve(master);
+  for (const plot of plots) {
+    const foot = footprint(plot.a, plot.b, plot.width, plot.depth, plot.fa, plot.fb);
+    if (!master.free(foot, NEIGHBOUR_GAP)) continue;
+    master.add(foot);
+    survivors.push(plot);
   }
 
-  const wantWorks = Math.max(1, Math.round(wanted * 0.16));
-  let works = 0;
-  let placed = buildings.length;
+  /**
+   * What fraction of the master plan is standing at this tier.
+   *
+   * Derived rather than authored, because the number of plots inside a given
+   * radius depends on the layout, the era's frontage and how much of the disc
+   * is buildable. Taking a running maximum guarantees the fraction never falls
+   * as the town grows, which is the invariant that makes growth additive: a
+   * building that exists at one tier exists at every tier above it.
+   */
+  let fill = 0;
+  for (let t = 0; t <= tier; t++) {
+    const r = TIER_RADIUS[t] * style.spread;
+    let inside = 0;
+    for (const plot of survivors) if (plot.dist <= r) inside++;
+    const want = Math.round(TIER_BUILDINGS[t] * (req.capital ? 1.18 : 1));
+    fill = Math.max(fill, inside > 0 ? Math.min(1, (want * 1.15) / inside) : 1);
+  }
 
-  // Candidates are tried until the town is full, or until enough have been
-  // rejected that the ground is clearly against it. The list is shuffled, so a
-  // town that runs out of usable ground is thinned evenly rather than built
-  // solid along the first street — and the attempt cap bounds the worst case,
-  // which is a metropolis planned on a mountainside where almost every
-  // candidate costs three terrain samples and fails.
-  const attempts = Math.min(order.length, Math.max(40, wanted * 5));
-  for (let k = 0; k < attempts && placed < wanted; k++) {
-    const { street, index, side } = order[k];
-    const p = street.points[index];
-    const prev = street.points[index - 1];
-    const next = street.points[index + 1];
-    let ta = next.a - prev.a;
-    let tb = next.b - prev.b;
-    const tl = Math.hypot(ta, tb) || 1;
-    ta /= tl;
-    tb /= tl;
-    // The street's normal, on the chosen side.
-    const na = -tb * side;
-    const nb = ta * side;
-
-    const dist = Math.hypot(p.a, p.b);
-    // Working buildings want the edge of town; dwellings want the middle.
-    const edge = dist / radiusAt(p.a, p.b);
-    // Thin out towards the boundary. A town that is solid to its last house
-    // and then bare ground has an edge you can trace with a finger; a real one
-    // frays into its fields.
-    if (edge > 0.72 && rng.next() < (edge - 0.72) * 2.6) continue;
-    const useWorks = works < wantWorks && edge > 0.55 && rng.chance(0.5);
-    const name = useWorks
-      ? pickWeighted(style.works, rng.next())
-      : pickWeighted(style.houses, rng.next());
-    const model = models[name];
-
-    // Hard against the street. A wide verge is what turns a town into a
-    // business park: buildings should crowd the road they were built for.
-    const setback = street.width * 0.5 + rng.range(0.7, 2.0) + model.depth * 0.5;
-    const a = p.a + na * setback;
-    const b = p.b + nb * setback;
-    if (Math.hypot(a, b) > radiusAt(a, b) * 1.15) continue;
-
-    // Facing the street means facing back along the normal.
-    const scale = rng.range(0.88, 1.14) * (edge > 0.7 ? 0.94 : 1);
-    if (place(name, a, b, -na, -nb, scale)) {
-      placed++;
-      if (useWorks) works++;
-    }
+  // No cap on the count. A hard stop once `wanted` buildings are standing reads
+  // as an obvious optimisation and is a subtle correctness bug: the fraction
+  // grows with the tier, so the plots that fill in ahead of a late one push it
+  // past the cap, and a house that was standing last century is gone. The
+  // fraction is the only thing deciding how much is built.
+  const plotRng = new Stream();
+  for (const plot of survivors) {
+    if (plot.u >= fill) continue;
+    const here = radiusAt(plot.a, plot.b);
+    if (plot.dist > here) continue;
+    // Thin out towards the boundary. A town that is solid to its last house and
+    // then bare ground has an edge you can trace with a finger; a real one
+    // frays into its fields. The probability only ever falls as the town grows,
+    // so this fringe fills in rather than moving.
+    const edge = plot.dist / here;
+    if (edge > 0.72 && plot.fringe < (edge - 0.72) * 2.6) continue;
+    plotRng.reseed(plot.seed ^ 0x5bf03635);
+    place(plot.name, plot.a, plot.b, plot.fa, plot.fb, plot.scale, plotRng, 'planned');
   }
 
   // --- Fields and orchards -------------------------------------------------
 
   {
+    const fieldRng = makeRng(mixSeed(geomSeed, 911));
     const farmed = tier >= 1;
     const count = farmed ? 40 + tier * 34 : 24;
     const outer = radius * 1.55;
     for (let i = 0; i < count; i++) {
-      const angle = rng.next() * Math.PI * 2;
-      const r = radius * 0.55 + Math.sqrt(rng.next()) * (outer - radius * 0.55);
+      const angle = fieldRng.next() * Math.PI * 2;
+      const r = radius * 0.55 + Math.sqrt(fieldRng.next()) * (outer - radius * 0.55);
       const a = Math.cos(angle) * r;
       const b = Math.sin(angle) * r;
-      if (!free(a, b, 2.5)) continue;
+      if (!taken.free(footprint(a, b, 5, 5, 1, 0), 0)) continue;
       const dir = site.direction(a, b, scratch);
       const ground = field.sample(dir.x, dir.y, dir.z, SAMPLE_SPACING);
       if (ground.height < 1.8) continue;
@@ -732,20 +852,20 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
       const lush = 0.55 + ground.moisture * 0.7;
       props.push({
         origin: dir.clone().multiplyScalar(PLANET_RADIUS + ground.height - 0.25),
-        rot: rng.next() * Math.PI,
+        rot: fieldRng.next() * Math.PI,
         size: kind === 1
-          ? rng.range(1.5, 2.3)
+          ? fieldRng.range(1.5, 2.3)
           : kind === 3
-            ? rng.range(1.6, 2.8)
-            : rng.range(3.4, 6.4),
+            ? fieldRng.range(1.6, 2.8)
+            : fieldRng.range(3.4, 6.4),
         kind,
         tint:
           kind === 1
-            ? [rng.range(0.34, 0.50), rng.range(0.34, 0.46), rng.range(0.09, 0.17)]
+            ? [fieldRng.range(0.34, 0.50), fieldRng.range(0.34, 0.46), fieldRng.range(0.09, 0.17)]
             : [
-                rng.range(0.09, 0.20) * lush,
-                rng.range(0.19, 0.34) * lush,
-                rng.range(0.06, 0.15) * lush,
+                fieldRng.range(0.09, 0.20) * lush,
+                fieldRng.range(0.19, 0.34) * lush,
+                fieldRng.range(0.06, 0.15) * lush,
               ],
       });
     }
@@ -756,6 +876,7 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
   // cheaply: a start point on a street, a direction, and a distance to walk.
 
   if (roads.length > 0) {
+    const walkRng = makeRng(mixSeed(geomSeed, 1327));
     const count = Math.min(64, 6 + tier * 11);
     const skin: Rgb[] = [
       [0.44, 0.31, 0.22],
@@ -774,9 +895,9 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
       [0.28, 0.30, 0.22],
     ];
     for (let i = 0; i < count; i++) {
-      const road = roads[rng.int(0, roads.length)];
+      const road = roads[walkRng.int(0, roads.length)];
       if (road.points.length < 3) continue;
-      const j = rng.int(1, road.points.length - 1);
+      const j = walkRng.int(1, road.points.length - 1);
       const p = road.points[j];
       const along = road.points[j + 1].clone().sub(road.points[j - 1]).normalize();
       const up = p.clone().normalize();
@@ -784,31 +905,20 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
       const lateral = new THREE.Vector3().crossVectors(up, along);
       const origin = p
         .clone()
-        .addScaledVector(lateral, rng.range(-road.width * 0.35, road.width * 0.35));
+        .addScaledVector(lateral, walkRng.range(-road.width * 0.35, road.width * 0.35));
       people.push({
         origin,
         along,
-        speed: rng.range(0.8, 1.5),
-        phase: rng.next(),
-        span: rng.range(12, 34),
-        tint: skin[rng.int(0, skin.length)],
-        cloth: cloth[rng.int(0, cloth.length)],
+        speed: walkRng.range(0.8, 1.5),
+        phase: walkRng.next(),
+        span: walkRng.range(12, 34),
+        tint: skin[walkRng.int(0, skin.length)],
+        cloth: cloth[walkRng.int(0, cloth.length)],
       });
     }
   }
 
-  return {
-    cell: req.cell,
-    tier: req.tier,
-    era: req.era,
-    signature: signatureOf(req),
-    centre,
-    radius,
-    buildings,
-    roads,
-    props,
-    people,
-  };
+  return finish();
 }
 
 export { TIER_RADIUS };

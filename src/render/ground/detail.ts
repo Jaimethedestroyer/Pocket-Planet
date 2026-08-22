@@ -36,16 +36,28 @@ import { BUILDING_FAR, BUILDING_NEAR, BuildingLayer } from './buildings';
 import { ROAD_FAR, ROAD_NEAR, RoadLayer } from './roads';
 import { PROP_FAR, PROP_NEAR, PropLayer } from './props';
 import { PEOPLE_FAR, PEOPLE_NEAR, PeopleLayer } from './people';
-import { planTown, signatureOf } from './plan';
+import { TIER_RADIUS, planTown, signatureOf } from './plan';
 import type { ArchetypeName } from './archetypes';
 import { kitShowcase } from './showcase';
+import { RoadNetwork } from './network';
+import type { NetworkTown } from './network';
 import { Wilderness } from './wilderness';
-import type { TownPlan, TownRequest } from './plan';
+import type { RoadPath, TownPlan, TownRequest } from './plan';
 import { townStyle } from './style';
 import type { Rgb } from './style';
 
 /** Most towns detailed at once. Beyond this the far ones are simply dropped. */
 const MAX_TOWNS = 40;
+
+/**
+ * Most towns considered for the road network.
+ *
+ * Deliberately larger than `MAX_TOWNS`. A road is drawn from far higher up than
+ * the buildings at either end of it, and a network computed only over the forty
+ * towns that are close enough to have streets would stop dead at an invisible
+ * boundary — every road leaving the region cut off in a field.
+ */
+const MAX_LINKED = 160;
 
 /** How long may be spent planning towns in one frame. */
 const PLAN_BUDGET_MS = 3.5;
@@ -56,6 +68,16 @@ export interface RuinView {
   name: string;
   abandoned: number;
 }
+
+/**
+ * The colour of a road between towns.
+ *
+ * One colour for the whole network rather than each town's own, because a road
+ * is a single object that happens to have two ends, and shading half of it in
+ * one culture's palette and half in another's makes it read as two roads that
+ * meet.
+ */
+const ROUTE_COLOR: Rgb = [0.34, 0.30, 0.25];
 
 interface Active {
   cell: number;
@@ -77,6 +99,9 @@ export class GroundDetail {
   private field: PlanetField;
   private worldSeed: number;
   private wild: Wilderness;
+  private network: RoadNetwork;
+  private networkTowns = new Map<number, NetworkTown>();
+  private networkRoads: RoadPath[] = [];
 
   private plans = new Map<number, TownPlan>();
   private pending: TownRequest[] = [];
@@ -97,6 +122,7 @@ export class GroundDetail {
     this.worldSeed = worldSeed;
 
     this.wild = new Wilderness(field, worldSeed);
+    this.network = new RoadNetwork(field);
     this.buildings = new BuildingLayer(shared);
     this.roads = new RoadLayer(shared);
     this.props = new PropLayer(shared);
@@ -238,6 +264,7 @@ export class GroundDetail {
       distance: number;
       request: TownRequest;
       banner: Rgb;
+      polity: number;
       style: ReturnType<typeof townStyle>;
     }[] = [];
 
@@ -249,6 +276,7 @@ export class GroundDetail {
       hue: number,
       capital: boolean,
       ruined: boolean,
+      polity: number,
     ): void => {
       const c = cell * 3;
       this.unit.set(positions[c], positions[c + 1], positions[c + 2]);
@@ -262,6 +290,7 @@ export class GroundDetail {
         cell,
         distance,
         banner: polityColor(hue),
+        polity,
         style: townStyle(era, culture),
         request: {
           cell,
@@ -288,13 +317,41 @@ export class GroundDetail {
         polity.hue,
         polity.capital === s.cell,
         false,
+        s.polity,
       );
     }
     for (const r of ruins) {
-      consider(r.cell, 2, Era.Ancient, 'ruin', 0.1, false, true);
+      consider(r.cell, 2, Era.Ancient, 'ruin', 0.1, false, true, -1);
     }
 
     candidates.sort((a, b) => a.distance - b.distance);
+
+    // --- The road network between them --------------------------------------
+    //
+    // Built from a wider set than the one that gets streets, and before the
+    // list is truncated, so that a road leaving the detailed region still has
+    // somewhere to go. Ruins are left out: nobody maintains the road to a town
+    // that emptied four centuries ago, and drawing one is the strongest
+    // possible statement that somebody does.
+    this.networkTowns.clear();
+    const linkable: NetworkTown[] = [];
+    for (const c of candidates) {
+      if (c.request.ruined) continue;
+      if (linkable.length >= MAX_LINKED) break;
+      const tier = Math.min(TIER_RADIUS.length - 1, Math.max(0, c.request.tier));
+      const town: NetworkTown = {
+        cell: c.cell,
+        unit: c.request.unit,
+        radius: TIER_RADIUS[tier] * c.style.spread,
+        polity: c.polity,
+        tier,
+        era: c.request.era,
+      };
+      linkable.push(town);
+      this.networkTowns.set(c.cell, town);
+    }
+    const networkChanged = this.network.update(linkable);
+
     if (candidates.length > MAX_TOWNS) candidates.length = MAX_TOWNS;
 
     // --- Plan whatever is missing or stale, within the frame's budget -------
@@ -360,7 +417,7 @@ export class GroundDetail {
     const wildChanged = this.wild.update(this.wildCentre, wildReach, this.wildExclude);
 
     this.townCount = active.length;
-    if (signature === this.uploaded && !wildChanged) return;
+    if (signature === this.uploaded && !wildChanged && !networkChanged) return;
     this.uploaded = signature;
     this.upload(active);
   }
@@ -377,11 +434,19 @@ export class GroundDetail {
 
     for (const p of this.wild.props) this.props.add(p);
 
+    // The routes between towns, before the towns themselves: an inter-town road
+    // should read as the thing the streets join, not as something laid over
+    // them.
+    this.networkRoads.length = 0;
+    this.network.roads(this.networkTowns, this.networkRoads);
+    for (const road of this.networkRoads) this.roads.add(road, ROUTE_COLOR);
+
     for (const town of active) {
       const { plan } = town;
       const near = town.distance - plan.radius;
 
       for (const road of plan.roads) this.roads.add(road, town.roadColor);
+      for (const plaza of plan.plazas) this.roads.addPlaza(plaza, town.roadColor);
 
       if (near < BUILDING_FAR * scale) {
         for (const b of plan.buildings) this.buildings.add(b, town.banner);
@@ -420,6 +485,7 @@ export class GroundDetail {
     this.townCount = 0;
     this.uploaded = '';
     this.wild.clear();
+    this.network.clear();
   }
 
   getStats(): Record<string, number> {
@@ -433,6 +499,8 @@ export class GroundDetail {
       planMs: this.lastPlanMs,
       wildMs: this.wild.buildMs,
       wildPlants: this.wild.props.length,
+      routes: this.network.routeCount,
+      routeMs: this.network.routedMs,
       cachedPlans: this.plans.size,
     };
   }

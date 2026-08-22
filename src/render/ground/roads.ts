@@ -20,7 +20,7 @@
 
 import * as THREE from 'three';
 import type { SharedUniforms } from '../environment';
-import type { RoadPath } from './plan';
+import type { Plaza, RoadPath } from './plan';
 
 export const ROAD_NEAR = 900;
 export const ROAD_FAR = 1500;
@@ -31,6 +31,7 @@ attribute float aAcross;
 attribute float aAlong;
 attribute vec3 aColor;
 attribute float aGrade;
+attribute float aReach;
 
 uniform float uFadeNear;
 uniform float uFadeFar;
@@ -58,7 +59,11 @@ void main() {
   vGrade = aGrade;
   vNormal = normalize(normal);
   vWorldPos = world;
-  vFade = 1.0 - smoothstep(uFadeNear, uFadeFar, dist);
+  // Each road carries its own range. A lane between two rows of houses is
+  // invisible from four hundred metres and only adds noise to the read; the
+  // route between two towns is the *first* thing that should appear. Fading
+  // them together is what turned a region into a haze of pale threads.
+  vFade = 1.0 - smoothstep(uFadeNear * aReach, uFadeFar * aReach, dist);
 
   gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);
 }
@@ -144,6 +149,7 @@ export class RoadLayer {
   private along: number[] = [];
   private color: number[] = [];
   private grade: number[] = [];
+  private reach: number[] = [];
   private index: number[] = [];
 
   private up = new THREE.Vector3();
@@ -189,6 +195,7 @@ export class RoadLayer {
     this.along.length = 0;
     this.color.length = 0;
     this.grade.length = 0;
+    this.reach.length = 0;
     this.index.length = 0;
   }
 
@@ -233,6 +240,7 @@ export class RoadLayer {
         this.along.push(travelled);
         this.color.push(color[0], color[1], color[2]);
         this.grade.push(road.grade);
+        this.reach.push(road.reach ?? 1);
       };
 
       write(-shoulder, 0);
@@ -247,6 +255,62 @@ export class RoadLayer {
       for (let k = 0; k < 3; k++) {
         this.index.push(a + k, b + k, b + k + 1, a + k, b + k + 1, a + k + 1);
       }
+    }
+  }
+
+  /**
+   * Add one open square.
+   *
+   * Three rings of vertices rather than a plain fan: the centre, a rim just
+   * inside the boundary, and the boundary itself at zero opacity. The middle
+   * ring is what keeps the square solid right up to its edge — a fan straight
+   * from the centre to a transparent rim is a square that is only opaque in the
+   * middle, which reads as a puddle.
+   */
+  addPlaza(plaza: Plaza, color: RoadColor): void {
+    const rim = plaza.rim;
+    const n = rim.length;
+    if (n < 3) return;
+
+    const base = this.position.length / 3;
+    this.up.copy(plaza.centre).normalize();
+
+    const write = (p: THREE.Vector3, edgeValue: number, across: number, along: number): void => {
+      this.position.push(p.x, p.y, p.z);
+      this.normal.push(this.up.x, this.up.y, this.up.z);
+      this.edge.push(edgeValue);
+      this.across.push(across);
+      this.along.push(along);
+      this.color.push(color[0], color[1], color[2]);
+      this.grade.push(plaza.grade);
+      this.reach.push(0.9);
+    };
+
+    write(plaza.centre, 1, 0, 0);
+    let travelled = 0;
+    for (let i = 0; i < n; i++) {
+      const p = rim[i];
+      if (i > 0) travelled += this.tmp.copy(p).sub(rim[i - 1]).length();
+      // The inner ring sits a fixed fraction of the way in, measured from the
+      // centre, so an irregular boundary keeps an even border all the way round.
+      this.tmp.copy(p).sub(plaza.centre).multiplyScalar(0.88).add(plaza.centre);
+      // Push it back onto the ground the rim was draped on: interpolating
+      // towards the centre cuts the corner off the sphere.
+      this.tmp.normalize().multiplyScalar(
+        plaza.centre.length() + (p.length() - plaza.centre.length()) * 0.88,
+      );
+      write(this.tmp, 1, 0, travelled);
+      write(p, 0, 0.86, travelled);
+    }
+
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const innerI = base + 1 + i * 2;
+      const outerI = innerI + 1;
+      const innerJ = base + 1 + j * 2;
+      const outerJ = innerJ + 1;
+      this.index.push(base, innerI, innerJ);
+      this.index.push(innerI, outerI, outerJ, innerI, outerJ, innerJ);
     }
   }
 
@@ -265,6 +329,7 @@ export class RoadLayer {
     this.geometry.setAttribute('aAlong', new THREE.Float32BufferAttribute(this.along, 1));
     this.geometry.setAttribute('aColor', new THREE.Float32BufferAttribute(this.color, 3));
     this.geometry.setAttribute('aGrade', new THREE.Float32BufferAttribute(this.grade, 1));
+    this.geometry.setAttribute('aReach', new THREE.Float32BufferAttribute(this.reach, 1));
     this.geometry.setIndex(this.index);
     this.geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
     this.mesh.geometry = this.geometry;

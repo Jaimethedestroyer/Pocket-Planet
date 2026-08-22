@@ -1,119 +1,44 @@
 # The next pass
 
-Written at the end of the ground-detail polish pass, from watching the thing
-run. `STATUS.md` is where the project is; this is what to do next and why, in
-the order that buys the most.
+Written at the end of the town-planning pass, from watching the thing run.
+`STATUS.md` is where the project is; this is what to do next and why, in the
+order that buys the most.
 
-The through-line: the world is now *built* but it is not yet *coherent*. Towns
-are dense but congested, roads are everywhere and connect nothing, and the
-whole planet changes in discrete jumps that no amount of detail hides.
-
----
-
-## 1. Building placement — congestion
-
-**What it looks like.** Past about tier 3, buildings crowd and interpenetrate.
-Walls pass through walls. A dense quarter reads as a heap rather than as a
-street of houses.
-
-**Where it comes from.** `plan.ts`:
-
-- Collision is a circle test at `half * 0.78`, where `half` is
-  `max(width, depth) / 2`. For anything not square — a warehouse is 13.5 × 21,
-  a terrace 13.6 × 8 — the circle is far larger than the building in one axis
-  and far smaller in the other. Buildings that are actually clear get rejected;
-  buildings that actually overlap get accepted.
-- Setback is `street.width/2 + rng(0.7, 2.0) + model.depth/2`, measured from
-  the *street centreline*. Two buildings on opposite sides of a narrow lane can
-  therefore end up closer than either is wide.
-- Nothing considers rotation. A building is placed facing the street and then
-  collision-tested as a circle, which throws that information away.
-
-**What to do.** Replace the circle with an oriented-rectangle overlap test —
-the models are boxes, their footprints are rectangles, and separating-axis on
-two rotated rectangles is about fifteen lines. Then the margin can come *down*
-rather than up: real streets are tight, and the reason this looks bad is
-overlap, not density. Add a small explicit gap (0.6–1.2 m) between neighbours
-so terraces read as separate houses.
-
-Worth doing at the same time: give each building a plot rather than a point.
-Walking the frontage and allocating a run of it per building, instead of
-sampling points and testing collision, is both cheaper and produces the
-terraced look that a street actually has.
+The through-line has moved. The world is now built *and* coherent — towns are
+laid out rather than heaped, they grow instead of being replaced, and roads run
+between them. What it is not yet is **alive**: everything the simulation knows
+about happening happens invisibly, and the presentation runs on its own clock
+regardless of what the player has asked history to do.
 
 ---
 
-## 2. Road placement — cohesion
+## What the last pass did, so it is not done twice
 
-**What it looks like.** Roads are laid out per town with no relationship to the
-terrain or to anything outside the town. Streets run up slopes they should
-contour around; at the centre several converge into an undifferentiated paved
-slab; and no road ever leaves a settlement, so a continent of towns has no
-network at all.
-
-**What to do, in order of payoff:**
-
-- **Roads between towns.** The single largest legibility win available. The
-  roadmap already wants trade routes as real simulation objects
-  (`ROADMAP.md`, Tier 1); a road drawn between two settlements that trade is
-  the visible half of that. Even without the simulation change, connecting each
-  town to its nearest two or three neighbours of the same polity would
-  transform how a region reads from 600 m.
-- **Let terrain shape the streets.** The layouts are generated on a flat disc
-  and lifted afterwards, so they are blind to slope. Sampling the height field
-  while routing — and preferring contours over falls — is what makes a hill
-  town look like a hill town.
-- **A square, not a slab.** Where streets converge at the centre, make that an
-  explicit plaza with a known boundary, rather than the accidental union of
-  several overlapping ribbons. The civic building and the great work already go
-  there; give them a forecourt.
-- **Junctions.** Two crossing ribbons currently double-blend their soft
-  shoulders. A junction should be a piece of geometry, not an overlap.
+- Building overlap is a separating-axis test on rotated rectangles
+  (`ground/plot.ts`), not a circle. Plots are allocated as *runs of frontage*
+  along each street rather than sampled and rejected, which is where the
+  terraces came from.
+- A town's layout is drawn once at its ultimate size (`ground/layout.ts`) and
+  the tier only reveals a fraction of it, so growth is additive. `npm run
+  probe-town` asserts that and fails the build of anyone who breaks it.
+- Streets slide onto their contour where the ground falls across them, and are
+  left to climb where it falls along them.
+- The town centre is an explicit square with a boundary, and the ground under it
+  is reserved from the start whether or not anything is standing on it yet.
+- `ground/network.ts` routes roads between settlements, cached per pair of cells
+  and budgeted per frame like town planning.
+- Roads carry their own LOD range, nested inside the road layer's: a route
+  between towns appears first on a descent, a back lane last.
+- The lighthouse is gated to Ancient and later.
 
 ---
 
-## 3. Pop-in — the world changing in jumps
-
-**What it looks like.** At 1× speed, watching a single town, a whole quarter
-vanishes and a different one appears. Not a fade — a substitution.
-
-**Where it comes from.** This one has a specific and fixable cause. In
-`plan.ts`:
-
-```ts
-const rng = makeRng(mixSeed(worldSeed, req.cell * 7919 + req.era * 31 + req.tier));
-```
-
-The plan's random seed contains **the tier**. So the moment a settlement grows
-from village to town, every street moves, every building is redrawn somewhere
-else, and the town you were looking at is replaced by a different town of the
-same name. The same happens on an era change.
-
-**What to do.** Seed the plan from the cell alone. Growth should then be
-*additive*: the same streets, the same buildings, plus more of both. Concretely:
-
-- Seed with `cell` only, and derive tier-dependent decisions from a stream that
-  is stable as tier increases — generate the layout for the *largest* tier the
-  town will ever plausibly reach, then reveal the first N buildings by tier.
-- Era changes are genuinely a rebuild — a town does move from huts to mudbrick
-  — but it should be staged, not instantaneous. Replacing a fraction of the
-  buildings per decade would read as a town rebuilding itself, which is what is
-  actually happening.
-- Buildings already **grow in** with distance rather than fading. The same
-  mechanism can serve here: a newly-planned building rises out of the ground
-  over a second or two instead of appearing.
-
-Also worth checking: `MAX_TOWNS = 40` in `detail.ts` means the 41st-nearest
-town pops in and out as the camera moves. A hysteresis band on that list would
-cost nothing.
-
----
-
-## 4. Time should mean time
+## 1. Time should mean time
 
 **What it looks like.** Pressing 9× makes centuries pass in seconds while the
 sun still takes four real minutes to cross the sky and the clouds drift at the
-same lazy pace. The world is sped up; the *day* is not.
+same lazy pace. The world is sped up; the *day* is not. This is now the largest
+gap between what the player asked for and what they are shown.
 
 **Where it comes from.** `Environment.dayLength` is a fixed 240 real seconds
 and `angle += dt / dayLength`. Cloud drift runs on `uTime`, which is real
@@ -142,7 +67,7 @@ reading at 9×.
 
 ---
 
-## 5. Wars you can see
+## 2. Wars you can see
 
 The chronicle says two states are at war and nothing on the planet does. This
 is the biggest gap between what the simulation knows and what the player sees.
@@ -158,14 +83,18 @@ Ordered cheapest first:
   from.
 - **Ruins from war**, distinct from ruins from abandonment — blackened, not
   merely weathered.
+- **Roads that close.** The chronicle already says "the roads are closed" when
+  plague spreads. `network.ts` knows which pairs of towns are joined and by
+  which polities; a route between two states at war could simply not be drawn.
+  Nearly free, and it makes the network mean something.
 - **Projectiles between besieging positions.** What was asked for, and the
   right thing to do *last*: it only reads at close range, where the player
   rarely is during a war, and it needs an arc, a lifetime and a pooled
-  instanced layer. Do the three above first and see whether it is still wanted.
+  instanced layer. Do the four above first and see whether it is still wanted.
 
 ---
 
-## 6. Night by era
+## 3. Night by era
 
 **What it looks like.** Every settlement glows from window emission, scaled by
 an era `lamps` value (primitive 0.30 → industrial 1.0). So a primitive village
@@ -175,23 +104,60 @@ reads as a dim modern town rather than as a handful of fires in the dark.
 
 - Add a **fire layer**: additive billboards at hearths, gates and the town
   centre, using the fire sheet from `ASSET-STYLE.md`. Flickering, warm, few.
+  The town square is now a real object with a known boundary and a known
+  centre, which is exactly where the brazier goes.
 - Make primitive and ancient settlements light *only* from fires, with window
   emission scaled to nearly nothing.
 - Medieval: fires plus dim windows plus the odd torch.
 - Industrial: keep what exists, and the roadmap's "city lights by era" note
   applies — a cold white-blue at the industrial end, so the age of a
   civilization is legible from orbit at night.
+- A **primitive coastal settlement** should get a beacon fire on the headland,
+  which is the thing the lighthouse gate took away from it.
 
-**Also a bug:** `plan.ts` gives a lighthouse to any coastal town on
-`req.coastal && rng.chance(0.35)` with no era gate. A primitive fishing village
-should not have one. Gate it to Ancient and later — and a *primitive* coastal
-settlement wanting a navigation light should get a beacon fire, which is both
-correct and better looking.
+---
+
+## 4. An era change is still a redraw
+
+Growth within an era is now additive: a village becoming a town keeps every
+building it had. Crossing an era boundary is still instantaneous — every
+building in the settlement is replaced in one frame, because the era decides
+what the models *are*.
+
+That one is genuinely a rebuild, but it should be staged rather than sudden. A
+town does move from huts to mudbrick, and it takes it a century.
+
+**What to do.** The plot list is already stable across eras — `layout.ts` is
+seeded from the cell, and only the *style* it is handed changes. So each plot
+can carry a stable draw deciding *when* in the era transition it is rebuilt, and
+the planner can then hold a mixed town: some houses in the old material, some in
+the new. Replacing a fraction of the buildings per decade would read as a town
+rebuilding itself, which is what is actually happening.
+
+Worth doing at the same time: buildings already **grow in** with distance
+rather than fading. The same mechanism can serve here — a newly-built building
+rises out of the ground over a second or two instead of appearing.
+
+---
+
+## 5. Junctions
+
+Two crossing ribbons still double-blend their soft shoulders, and the result is
+a bright cross wherever two streets meet. The square at the town centre is now
+a piece of geometry with a boundary; a crossroads should be too.
+
+The cheap version: where two street polylines cross within a town, emit a small
+paved patch — the same fan `roads.ts` already builds for a square — and let the
+ribbons run into it. `layout.ts` has every street in flat metres, so finding the
+crossings is a segment-intersection sweep over a few dozen polylines and costs
+nothing.
 
 ---
 
 ## Smaller things, if there is time
 
+- **`MAX_TOWNS = 40`** in `detail.ts` means the 41st-nearest town pops in and
+  out as the camera moves. A hysteresis band on that list would cost nothing.
 - **Masonry detail dies at ~460 m**, so a town at mid zoom is flat colour.
   Correct for the cost; a coarser mid-range variation term would help.
 - **Vegetation is one disc following the camera.** The planet-wide version
@@ -199,11 +165,13 @@ correct and better looking.
   sampling, since patch vertices already carry height, moisture and
   temperature, but it has to stay stable as patches split and merge.
 - **Shadows are a sheared footprint quad** and show it on a low sun.
-- **Building heights do not vary within an archetype.** Per-instance storey
-  count for houses would break up a skyline cheaply.
-- **`plan.ts` is about 700 lines** and now does streets, buildings, fields,
-  people and ruins. It is coherent but it is at the size where the next feature
-  should probably split it.
+- **Building heights do not vary within an archetype** beyond a per-instance
+  vertical stretch. A real per-instance storey count for houses would break up
+  a skyline cheaply.
+- **Ruins are still scattered, not planned.** A ruined settlement draws rubble
+  at random points inside its radius rather than on the streets of the town
+  that was there. `layout.ts` would give it those streets for free, and a ruin
+  that still has a street plan is a far stronger image than a heap.
 
 ---
 
@@ -213,13 +181,24 @@ Every item above is judged by looking, not by reading. The loop is:
 
 ```bash
 npm run build
-CLOUDS=0 TAG=try1 npm run shot -- city city-close city-street
+CLOUDS=0 TAG=try1 npm run shot -- city city-close city-street region
 ```
 
 then look at `docs/shots/`, change one thing, shoot again with a new `TAG`, and
 compare. Read `STATUS.md` § *Screenshots are the main development tool* first —
 particularly the note about the camera framing its target, which has cost more
 debugging time than any actual bug in this project.
+
+There is one thing screenshots cannot judge, and it now has its own harness:
+
+```bash
+npm run probe-town
+```
+
+A town that grows must not redraw itself. Run this after anything that touches
+`render/ground/`, and read the invariant in `STATUS.md` before assuming a
+failure is a small one — every way this has broken so far looked like something
+else.
 
 And run `npm run soak` and `npm run verify-save` before committing anything
 that touches `src/sim/`.

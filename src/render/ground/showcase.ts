@@ -130,6 +130,7 @@ export function kitShowcase(
     radius: (columns * spacing) / 2,
     buildings,
     roads: [],
+    plazas: [],
     props: [],
     people: [],
   };
