@@ -176,20 +176,27 @@ away from the sun; with only the terrain's ambient, that wall is not shadowed, i
 black.
 
 **Still open here.** Buildings cast a sheared quad rather than a real shadow, which is
-right for the cost but shows on a low sun. Towns are denser than they were and still
-thinner than they should be at the top tiers. And the general ground scatter below is
-still the missing half of "land detail": vegetation exists around towns and nowhere
-else.
+right for the cost but shows on a low sun. Masonry courses and weathering only survive
+within about a hundred and fifty metres, which is correct and does mean a town at mid
+zoom is still flat colour. And planet-wide vegetation is still the missing half of "land
+detail" — see below.
 
 ### Terrain detail textures · **M**
 Procedural grain gets the ground surprisingly far, but triplanar grass, rock and sand at
 close range would sharpen everything below about two hundred metres.
 
-### Vegetation away from towns · **M**
-Trees, crops and scrub exist in a ring around every settlement and nowhere else, so a
-wilderness is bare ground. The instanced crossed-quad layer is already built; what it
-needs is a scatter tied to the terrain LOD patches rather than to the town planner, which
-is a different and larger problem: it has to be stable as patches split and merge.
+### Vegetation away from towns · **partly done**
+One disc of scatter follows the camera's ground point and is rebuilt, a few hundred
+candidates per frame, once it has moved a third of its own radius. Density falls off with
+distance and comes from the climate the terrain function already computes, so a damp
+valley is wooded and a dry ridge is not.
+
+What it is *not* is a scatter over the whole planet. Vegetation exists where you are and
+nowhere else, which is invisible from the ground and obvious the moment two viewpoints
+are compared from the air. The real answer is a scatter hung off the terrain's own LOD
+patches: it comes free of extra terrain sampling, because the patch vertices already
+carry height, moisture and temperature — but it has to stay stable as patches split and
+merge underneath it, which is the whole difficulty.
 
 ---
 

@@ -225,7 +225,8 @@ for (const shot of shots) {
       `states ${stats.states}  ` +
       `towns ${stats.settlements}  ` +
       `built ${stats.towns}/${stats.buildings}b/${stats.plants}p/${stats.people}h  ` +
-      `plan ${stats.planMs.toFixed(1)}ms`,
+      `plan ${stats.planMs.toFixed(1)}ms  ` +
+      `wild ${stats.wildPlants}/${stats.wildMs.toFixed(1)}ms`,
   );
 }
 

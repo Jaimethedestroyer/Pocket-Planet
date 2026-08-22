@@ -39,6 +39,7 @@ import { PEOPLE_FAR, PEOPLE_NEAR, PeopleLayer } from './people';
 import { planTown, signatureOf } from './plan';
 import type { ArchetypeName } from './archetypes';
 import { kitShowcase } from './showcase';
+import { Wilderness } from './wilderness';
 import type { TownPlan, TownRequest } from './plan';
 import { townStyle } from './style';
 import type { Rgb } from './style';
@@ -75,6 +76,7 @@ export class GroundDetail {
 
   private field: PlanetField;
   private worldSeed: number;
+  private wild: Wilderness;
 
   private plans = new Map<number, TownPlan>();
   private pending: TownRequest[] = [];
@@ -87,11 +89,14 @@ export class GroundDetail {
 
   private cameraPos = new THREE.Vector3();
   private unit = new THREE.Vector3();
+  private wildCentre = new THREE.Vector3();
+  private wildExclude: { centre: THREE.Vector3; radius: number }[] = [];
 
   constructor(shared: SharedUniforms, field: PlanetField, worldSeed: number) {
     this.field = field;
     this.worldSeed = worldSeed;
 
+    this.wild = new Wilderness(field, worldSeed);
     this.buildings = new BuildingLayer(shared);
     this.roads = new RoadLayer(shared);
     this.props = new PropLayer(shared);
@@ -115,6 +120,7 @@ export class GroundDetail {
     this.props.setRange(PROP_NEAR * scale, PROP_FAR * scale);
     this.people.setRange(PEOPLE_NEAR * scale, PEOPLE_FAR * scale);
     this.rangeScale = scale;
+    this.wild.invalidate();
   }
 
   private rangeScale = 1;
@@ -149,6 +155,9 @@ export class GroundDetail {
   setShowcase(row: number | 'all' | null): void {
     this.showcase = row;
     this.uploaded = '';
+    // The sheet shows the catalogue and nothing else; a stale wilderness would
+    // otherwise stay uploaded and put a forest through the middle of it.
+    this.wild.clear();
   }
 
   private showcase: number | 'all' | null = null;
@@ -337,8 +346,21 @@ export class GroundDetail {
       signature += `${c.cell}:${plan.signature}:${(c.distance / 64) | 0}|`;
     }
 
+    // Vegetation outside the towns. Follows the view centre rather than the
+    // camera's nadir for the same reason the kit sheet does: at any altitude
+    // worth scattering for, the two are a long way apart.
+    this.viewCentre(camera, this.wildCentre);
+    const wildReach =
+      altitude < PROP_FAR * this.rangeScale ? PROP_FAR * this.rangeScale * 0.95 : 0;
+    this.wildExclude.length = 0;
+    for (const c of candidates) {
+      const plan = this.plans.get(c.cell);
+      if (plan) this.wildExclude.push({ centre: plan.centre, radius: plan.radius });
+    }
+    const wildChanged = this.wild.update(this.wildCentre, wildReach, this.wildExclude);
+
     this.townCount = active.length;
-    if (signature === this.uploaded) return;
+    if (signature === this.uploaded && !wildChanged) return;
     this.uploaded = signature;
     this.upload(active);
   }
@@ -352,6 +374,8 @@ export class GroundDetail {
     const scale = this.rangeScale;
     let lampWeight = 0;
     let lampTotal = 0;
+
+    for (const p of this.wild.props) this.props.add(p);
 
     for (const town of active) {
       const { plan } = town;
@@ -395,6 +419,7 @@ export class GroundDetail {
     this.people.commit();
     this.townCount = 0;
     this.uploaded = '';
+    this.wild.clear();
   }
 
   getStats(): Record<string, number> {
@@ -406,6 +431,8 @@ export class GroundDetail {
       plants: this.props.instanceCount,
       people: this.people.instanceCount,
       planMs: this.lastPlanMs,
+      wildMs: this.wild.buildMs,
+      wildPlants: this.wild.props.length,
       cachedPlans: this.plans.size,
     };
   }
