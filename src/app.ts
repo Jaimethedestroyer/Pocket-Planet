@@ -14,6 +14,7 @@ import { RenderPipeline } from './render/post/pipeline';
 import { SettlementLayer } from './render/settlements';
 import { GroundDetail } from './render/ground/detail';
 import { SimClient } from './game/simClient';
+import { PERSIST_BY_DEFAULT } from './game/save';
 import { hashSeed } from './core/rng';
 
 export interface AppOptions {
@@ -34,6 +35,11 @@ export interface AppOptions {
   clouds?: number;
   /** Multiplier on how far ground detail is built. Zero switches it off. */
   detail?: number;
+  /**
+   * Whether this session continues the stored world or starts a new one.
+   * Defaults to save.ts's PERSIST_BY_DEFAULT.
+   */
+  persist?: boolean;
 }
 
 export interface ViewState {
@@ -153,7 +159,12 @@ export class PocketPlanetApp {
 
     // The simulation runs in its own worker on its own clock, so history
     // advances at the same rate whether the renderer is managing 60 fps or 20.
-    this.sim = new SimClient(opts.seed ?? 'pocket-planet', opts.cellCount ?? 4096);
+    this.sim = new SimClient(
+      opts.seed ?? 'pocket-planet',
+      opts.cellCount ?? 4096,
+      3,
+      opts.persist ?? PERSIST_BY_DEFAULT,
+    );
     this.terrainMaterial.uniforms.tTerritory.value = this.sim.territoryTexture;
 
     this.settlements = new SettlementLayer(this.environment.uniforms);
