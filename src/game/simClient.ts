@@ -66,17 +66,19 @@ export class SimClient {
 
   private seedText: string;
   private cellCount: number;
+  private persist: boolean;
   private policyLog: PolicyChange[] = [];
   private restored: SaveFile | null = null;
   private saveTimer = 0;
 
-  constructor(seedText: string, cellCount = 4096, startingPolities = 3) {
+  constructor(seedText: string, cellCount = 4096, startingPolities = 3, persist = true) {
     this.seedText = seedText;
     this.cellCount = cellCount;
+    this.persist = persist;
 
     // A save only applies to the world it came from; changing the seed in the
     // URL should give a new planet, not a corrupted old one.
-    const save = loadSave();
+    const save = persist ? loadSave() : null;
     this.restored = save && save.seed === seedText && save.cellCount === cellCount ? save : null;
     const seed = hashSeed(seedText);
     const data = new Uint8Array(TERRITORY_WIDTH * TERRITORY_HEIGHT * 4);
@@ -105,9 +107,15 @@ export class SimClient {
     // a phone is the moment that actually matters: closing the tab, switching
     // apps, or locking the screen all fire visibilitychange, and none of them
     // reliably fire anything else.
-    this.saveTimer = window.setInterval(() => this.save(), 15000);
-    document.addEventListener('visibilitychange', this.onVisibility);
-    window.addEventListener('pagehide', this.onPageHide);
+    //
+    // With persistence off, none of these are even attached: an existing save
+    // is then left exactly as it was, rather than being quietly overwritten by
+    // a session that was never going to be resumed.
+    if (persist) {
+      this.saveTimer = window.setInterval(() => this.save(), 15000);
+      document.addEventListener('visibilitychange', this.onVisibility);
+      window.addEventListener('pagehide', this.onPageHide);
+    }
   }
 
   private onVisibility = (): void => {
@@ -124,7 +132,7 @@ export class SimClient {
   }
 
   save(): void {
-    if (!this.ready || this.tick <= 0) return;
+    if (!this.persist || !this.ready || this.tick <= 0) return;
     writeSave({
       version: 1,
       seed: this.seedText,
@@ -214,7 +222,7 @@ export class SimClient {
 
   dispose(): void {
     this.save();
-    window.clearInterval(this.saveTimer);
+    if (this.saveTimer) window.clearInterval(this.saveTimer);
     document.removeEventListener('visibilitychange', this.onVisibility);
     window.removeEventListener('pagehide', this.onPageHide);
     this.worker.terminate();

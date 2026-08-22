@@ -53,7 +53,11 @@ page.on('pageerror', (e) => console.log('  page error:', e.message));
 // speed=0 pauses from the URL, which matters: pausing with a message after the
 // page has loaded leaves a few years of slack, and this test compares exact
 // ticks. The worker applies it before its first timer can fire.
-const url = `http://localhost:${PORT}/?seed=${SEED}&scale=0.4&autorotate=0&speed=0`;
+// `save=1` because persistence is off by default while the world is still
+// being built (see src/game/save.ts). This harness is the one thing that has
+// to have it on: proving a reloaded world is the same world is the whole point
+// of it, and it is what lets persistence be switched back on with confidence.
+const url = `http://localhost:${PORT}/?seed=${SEED}&save=1&scale=0.4&autorotate=0&speed=0`;
 
 async function boot() {
   await page.goto(url, { waitUntil: 'load' });

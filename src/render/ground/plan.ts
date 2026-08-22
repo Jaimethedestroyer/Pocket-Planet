@@ -417,6 +417,22 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
   const radius = TIER_RADIUS[tier] * style.spread;
   const wanted = Math.round(TIER_BUILDINGS[tier] * (req.capital ? 1.18 : 1));
 
+  /**
+   * The built radius in a given direction.
+   *
+   * A town whose buildings stop dead on a circle reads as a circle, however
+   * organic the streets inside it are — the boundary is the shape the eye
+   * actually picks up from four hundred metres. Two low harmonics break it
+   * into lobes, which is what a settlement growing along its good ground
+   * looks like from above.
+   */
+  const lobeA = rng.next() * Math.PI * 2;
+  const lobeB = rng.next() * Math.PI * 2;
+  const radiusAt = (a: number, b: number): number => {
+    const theta = Math.atan2(b, a);
+    return radius * (1 + 0.2 * Math.sin(theta * 2 + lobeA) + 0.12 * Math.sin(theta * 3 + lobeB));
+  };
+
   const centreDir = req.unit.clone().normalize();
   const centreHeight = field.height(centreDir.x, centreDir.y, centreDir.z, SAMPLE_SPACING);
   const centre = centreDir.clone().multiplyScalar(PLANET_RADIUS + centreHeight);
@@ -472,7 +488,13 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
     if (!forced && !free(a, b, half * 0.78)) return false;
 
     const h0 = site.height(a, b);
-    if (h0 < 0.55) return false;
+    // Freeboard, not merely "above sea level". The sea is not a plane: it has
+    // three bands of wave geometry and a surf line that runs up to three metres
+    // of depth, so ground half a metre proud of the datum is ground the water
+    // is standing on. A town planned to that threshold does not look coastal,
+    // it looks flooded — a scatter of roofs across a tidal flat with surf
+    // breaking between the houses.
+    if (h0 < 1.8) return false;
     const probe = Math.max(3, half);
     const hA = site.height(a + probe, b);
     const hB = site.height(a, b + probe);
@@ -573,7 +595,7 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
     for (const p of densify(street.points, 6)) {
       const v = new THREE.Vector3();
       const h = site.world(p.a, p.b, 0, v);
-      if (h < 0.5) flush();
+      if (h < 1.5) flush();
       else run.push(v);
     }
     flush();
@@ -655,7 +677,11 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
 
     const dist = Math.hypot(p.a, p.b);
     // Working buildings want the edge of town; dwellings want the middle.
-    const edge = dist / radius;
+    const edge = dist / radiusAt(p.a, p.b);
+    // Thin out towards the boundary. A town that is solid to its last house
+    // and then bare ground has an edge you can trace with a finger; a real one
+    // frays into its fields.
+    if (edge > 0.72 && rng.next() < (edge - 0.72) * 2.6) continue;
     const useWorks = works < wantWorks && edge > 0.55 && rng.chance(0.5);
     const name = useWorks
       ? pickWeighted(style.works, rng.next())
@@ -667,7 +693,7 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
     const setback = street.width * 0.5 + rng.range(0.7, 2.0) + model.depth * 0.5;
     const a = p.a + na * setback;
     const b = p.b + nb * setback;
-    if (Math.hypot(a, b) > radius * 1.2) continue;
+    if (Math.hypot(a, b) > radiusAt(a, b) * 1.15) continue;
 
     // Facing the street means facing back along the normal.
     const scale = rng.range(0.88, 1.14) * (edge > 0.7 ? 0.94 : 1);
@@ -691,7 +717,7 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
       if (!free(a, b, 2.5)) continue;
       const dir = site.direction(a, b, scratch);
       const ground = field.sample(dir.x, dir.y, dir.z, SAMPLE_SPACING);
-      if (ground.height < 1.4) continue;
+      if (ground.height < 1.8) continue;
 
       // Crops close in where the ground has been cleared, wild growth further
       // out — and what grows out there is whatever the climate already says

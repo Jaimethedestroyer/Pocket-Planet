@@ -180,7 +180,11 @@ const BUILDERS: Record<ArchetypeName, Builder> = {
 
   /** Flat-roofed mudbrick, a parapet, an outside stair to the roof. */
   mudhouse: (b) => {
-    b.box(0, 0, 0, 6.2, 3.3, 6.6, PART_WALL);
+    b.box(0, 0, 0, 6.2, 3.3, 6.6, PART_WALL, { top: false });
+    // The deck is roof, not wall. A flat-roofed house whose roof is the same
+    // whitewash as its walls reads from above as a solid pale plate with no
+    // shape at all — and from above is where most of the game happens.
+    b.box(0, 3.2, 0, 6.2, 0.1, 6.6, PART_ROOF);
     b.box(0, 3.3, 0, 6.4, 0.55, 6.8, PART_TRIM);
     b.windowRow('z+', 0, 0, 3.3, 1.6, 2, 3.0, 0.7, 1.0);
     b.windowRow('x+', 0, 0, 3.1, 1.6, 2, 3.2, 0.7, 1.0);
@@ -191,8 +195,10 @@ const BUILDERS: Record<ArchetypeName, Builder> = {
 
   /** A courtyard house: two wings and a wall, which is how a hot city is built. */
   courtyard: (b) => {
-    b.box(-3.0, 0, 0, 4.4, 3.4, 10.0, PART_WALL);
-    b.box(0, 0, -4.0, 6.0, 3.4, 4.0, PART_WALL);
+    b.box(-3.0, 0, 0, 4.4, 3.4, 10.0, PART_WALL, { top: false });
+    b.box(0, 0, -4.0, 6.0, 3.4, 4.0, PART_WALL, { top: false });
+    b.box(-3.0, 3.3, 0, 4.4, 0.1, 10.0, PART_ROOF);
+    b.box(0, 3.3, -4.0, 6.0, 0.1, 4.0, PART_ROOF);
     b.box(-3.0, 3.4, 0, 4.6, 0.5, 10.2, PART_TRIM);
     b.box(0, 3.4, -4.0, 6.2, 0.5, 4.2, PART_TRIM);
     // The wall that closes the yard, lower than the house.
@@ -229,7 +235,8 @@ const BUILDERS: Record<ArchetypeName, Builder> = {
 
   /** A ziggurat: four tiers, a processional stair, a shrine at the top. */
   ziggurat: (b) => {
-    let w = 30, d = 30, y = 0;
+    const baseD = 30;
+    let w = 30, d = baseD, y = 0;
     for (let i = 0; i < 4; i++) {
       b.box(0, y, 0, w, 3.6, d, PART_WALL, { shade: 1 - i * 0.02 });
       b.box(0, y + 3.6, 0, w + 0.5, 0.4, d + 0.5, PART_TRIM);
@@ -237,7 +244,12 @@ const BUILDERS: Record<ArchetypeName, Builder> = {
       w -= 6;
       d -= 6;
     }
-    steps(b, 0, 0, d / 2 + 3.0, 5.0, 0.5, 1.25, 12, PART_TRIM);
+    // The processional stair projects from the *base*, not from the shrine at
+    // the top: `d` has shrunk by twenty-four metres by the time the loop ends,
+    // so measuring from it put the flight inside the monument with its last
+    // few steps poking out of one face.
+    const run = 0.9;
+    steps(b, 0, 0, baseD / 2 - run * 0.5, 6.0, 0.8, run, 10, PART_TRIM);
     b.box(0, y, 0, 7.0, 3.4, 7.0, PART_WALL);
     b.box(0, y + 3.4, 0, 7.6, 0.5, 7.6, PART_TRIM);
     b.windowRow('z+', 0, 0, 3.5, y + 1.0, 1, 0, 1.4, 2.0);
@@ -554,15 +566,18 @@ const BUILDERS: Record<ArchetypeName, Builder> = {
     b.box(0, 0, 0, 7.0, 1.2, 7.0, PART_TRIM);
     b.box(0, 1.2, 0, 5.0, 3.6, 5.0, PART_WALL);
     b.box(0, 4.8, 0, 5.6, 0.5, 5.6, PART_TRIM);
+    // Carved, not painted. The figure was built out of the banner part, which
+    // means the polity's flag colour — so a state with a blue banner put up a
+    // blue person. Only what they are holding takes the colour.
     const y = 5.3;
-    b.prism(6, -0.85, y, 0, 0.62, 5.4, PART_BANNER, { taper: 0.85 });
-    b.prism(6, 0.85, y, 0, 0.62, 5.4, PART_BANNER, { taper: 0.85 });
-    b.prism(8, 0, y + 5.4, 0, 1.75, 5.6, PART_BANNER, { taper: 0.72 });
-    b.prism(8, 0, y + 11.0, 0, 0.85, 0.7, PART_BANNER);
-    b.prism(8, 0, y + 11.7, 0, 1.15, 1.9, PART_BANNER, { taper: 0.9 });
-    b.boxRotZ(-2.3, y + 8.4, 0, 5.0, 0.75, 0.75, 1.15, PART_BANNER);
-    b.boxRotZ(2.1, y + 7.6, 0, 4.6, 0.75, 0.75, -0.5, PART_BANNER);
-    b.prism(6, 3.9, y + 9.6, 0, 0.3, 3.4, PART_TRIM);
+    b.prism(6, -0.85, y, 0, 0.62, 5.4, PART_TRIM, { taper: 0.85 });
+    b.prism(6, 0.85, y, 0, 0.62, 5.4, PART_TRIM, { taper: 0.85 });
+    b.prism(8, 0, y + 5.4, 0, 1.75, 5.6, PART_TRIM, { taper: 0.72 });
+    b.prism(8, 0, y + 11.0, 0, 0.85, 0.7, PART_TRIM);
+    b.prism(8, 0, y + 11.7, 0, 1.15, 1.9, PART_TRIM, { taper: 0.9 });
+    b.boxRotZ(-2.3, y + 8.4, 0, 5.0, 0.75, 0.75, 1.15, PART_TRIM);
+    b.boxRotZ(2.1, y + 7.6, 0, 4.6, 0.75, 0.75, -0.5, PART_TRIM);
+    b.prism(6, 3.9, y + 9.6, 0, 0.3, 3.4, PART_BANNER);
     return { width: 8, depth: 8 };
   },
 

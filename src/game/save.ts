@@ -15,6 +15,22 @@ import type { PolicyChange } from '../sim/protocol';
 
 const KEY = 'pocket-planet/save/v1';
 
+/**
+ * Whether a session continues the stored world or starts a new one.
+ *
+ * **Off, deliberately, while the world is still being built.** Persistence
+ * works — a world reconstructs exactly from a seed and a few hundred bytes of
+ * dial changes — but "works" and "is what you want right now" are different
+ * things. Every reload was resuming the same planet, replaying however many
+ * tens of thousands of years it had accumulated, and landing you back in the
+ * same late-stage world. While the thing being looked at is how a civilization
+ * *grows*, that is precisely the part you never get to see.
+ *
+ * `?save=1` turns it back on for a session. Flipping this constant turns it
+ * back on for good, and nothing else has to change.
+ */
+export const PERSIST_BY_DEFAULT = false;
+
 /** Real seconds of absence that count as one simulated year. */
 export const SECONDS_PER_YEAR = 30;
 

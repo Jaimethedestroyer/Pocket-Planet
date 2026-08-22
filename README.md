@@ -39,7 +39,8 @@ Deploys to Vercel as-is: Vite preset, `npm run build`, output `dist`.
 
 | Parameter | Effect |
 |---|---|
-| `seed=name` | World seed |
+| `seed=name` | World seed. Omit it and every load is a new planet |
+| `save=1` | Resume the stored world instead of starting a new one |
 | `quality=low\|medium\|high` | Override the auto-detected quality tier |
 | `hud=1` | Show the performance HUD (or press `H`) |
 | `lat` `lon` `altitude` `heading` `sun` `tilt` | Jump to a viewpoint, in degrees and metres |
@@ -87,6 +88,13 @@ The planet, the simulation living on it, and an interface to nudge it.
 - **Saves that are a seed and a list of dial changes.** Loading replays history from
   year one. Eight hundred years of a world reconstruct exactly from **145 bytes**, and
   `npm run verify-save` proves it in a real browser on every change.
+
+  *Currently off by default.* Persistence works; resuming is not what you want while
+  the world is still being built, because every reload drops you back into the same
+  late-stage planet and the part being worked on is how a civilization **grows**. So an
+  unseeded session gets a fresh world, `?seed=name` pins one worth coming back to, and
+  `?save=1` turns resuming back on. One constant in `src/game/save.ts` makes it the
+  default again.
 - **Offline progress.** Time keeps passing while the game is closed; coming back opens
   on what happened while you were away.
 - **Tap anything.** A town gives you its name, its age, who rules it and what it has

@@ -5,6 +5,7 @@ import { Vector3 } from 'three';
 import { PLANET_RADIUS } from './planet/config';
 import type { ViewState } from './app';
 import type { QualityTier } from './planet/config';
+import { PERSIST_BY_DEFAULT } from './game/save';
 
 const canvas = document.getElementById('viewport') as HTMLCanvasElement;
 const boot = document.getElementById('boot')!;
@@ -13,7 +14,23 @@ const bootStatus = document.getElementById('boot-status')!;
 const hud = document.getElementById('hud')!;
 
 const params = new URLSearchParams(location.search);
-const seed = params.get('seed') ?? 'pocket-planet';
+
+/**
+ * Whether the stored world is resumed, and which planet is generated.
+ *
+ * With persistence off — which it is, for now; see save.ts — the seed cannot
+ * also stay fixed, or "a new game every time" is the same three thousand years
+ * replayed identically on every reload. So an unseeded session gets a fresh
+ * planet, and `?seed=whatever` pins one you want to come back to.
+ */
+const persist = params.has('save') ? params.get('save') === '1' : PERSIST_BY_DEFAULT;
+const seed =
+  params.get('seed') ?? (persist ? 'pocket-planet' : newSeedName());
+
+function newSeedName(): string {
+  const n = Math.floor(Math.random() * 0xffffffff).toString(36);
+  return `world-${n}`;
+}
 const quality = (params.get('quality') as QualityTier | null) ?? undefined;
 
 const renderScale = params.has('scale') ? Number(params.get('scale')) : undefined;
@@ -36,6 +53,7 @@ const app = new PocketPlanetApp({
   bloom,
   clouds,
   detail,
+  persist,
   cellCount,
   speed,
 });
@@ -52,9 +70,11 @@ if (Object.keys(view).length > 0) app.setView(view);
 
 // `?kit=all` swaps the world's towns for a sheet of every model in the
 // catalogue, laid out on the ground the camera is looking at; `?kit=2` shows
-// one row of six, close enough to judge. Development only; see showcase.ts.
+// row two of six, close enough to judge. Development only; see showcase.ts.
+// Row numbers are taken literally — `kit=1` used to also mean "all", which
+// made the one row nobody could look at the ancient one.
 const kit = params.get('kit');
-if (kit !== null) app.ground.setShowcase(kit === 'all' || kit === '1' ? 'all' : Number(kit));
+if (kit !== null) app.ground.setShowcase(kit === 'all' ? 'all' : Number(kit));
 
 // --- Game interface --------------------------------------------------------
 
@@ -131,7 +151,12 @@ const hudFields = {
   tris: document.getElementById('hud-tris')!,
   lod: document.getElementById('hud-lod')!,
   pending: document.getElementById('hud-pending')!,
+  seed: document.getElementById('hud-seed')!,
 };
+
+// The seed is the whole world. With a fresh one every load it is the only way
+// to get back to a planet worth keeping, so it goes somewhere you can read it.
+hudFields.seed.textContent = seed;
 
 function formatAltitude(m: number): string {
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m.toFixed(0)} m`;

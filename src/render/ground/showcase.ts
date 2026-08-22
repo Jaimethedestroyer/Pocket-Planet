@@ -65,21 +65,29 @@ export function kitShowcase(
   unit: THREE.Vector3,
   row: number | 'all' = 'all',
 ): TownPlan {
-  archetypes();
   const up = unit.clone().normalize();
   const ref = Math.abs(up.y) < 0.99 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
   const east = new THREE.Vector3().crossVectors(ref, up).normalize();
   const north = new THREE.Vector3().crossVectors(up, east);
 
   const columns = 6;
-  // Wide enough for the largest thing in the kit, which is a castle at forty
-  // metres. Sized to the average, the castle would eat its neighbours.
-  const spacing = 46;
   const names =
     row === 'all'
       ? ARCHETYPE_NAMES
       : ARCHETYPE_NAMES.slice(row * columns, row * columns + columns);
   const rows = Math.ceil(names.length / columns);
+
+  // Spacing follows the largest model actually on the sheet, not a constant.
+  // A fixed forty-six metres is what a castle needs and is four times what a
+  // well needs — so the row of small props spread out over three hundred
+  // metres and could only be photographed from an altitude that made every one
+  // of them nine pixels wide.
+  const models = archetypes();
+  let widest = 0;
+  for (const name of names) {
+    widest = Math.max(widest, models[name].width, models[name].depth);
+  }
+  const spacing = Math.max(12, widest * 1.35);
 
   const buildings: TownPlan['buildings'] = [];
   const direction = new THREE.Vector3();

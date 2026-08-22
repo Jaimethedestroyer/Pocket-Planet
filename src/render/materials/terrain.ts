@@ -286,6 +286,13 @@ export function updateTerrainDetail(
   // The political overlay strengthens with altitude. From orbit the planet is
   // being read as a map and borders are the point; standing in a field it
   // would only be a coloured film over ground the player came down to look at.
-  const t = THREE.MathUtils.smoothstep(altitude, 120, 2200);
-  material.uniforms.uTerritoryStrength.value = 0.4 + t * 0.85;
+  //
+  // The floor used to be 0.4, which is not a film — it is a wash. Now that
+  // there are towns to come down and look at, a city at three hundred metres
+  // sat on ground tinted so far towards its state's colour that a blue polity's
+  // land read as shallow water, right next to actual shallow water. The ramp
+  // also starts higher, because two hundred metres up is still a place rather
+  // than a map.
+  const t = THREE.MathUtils.smoothstep(altitude, 260, 2400);
+  material.uniforms.uTerritoryStrength.value = 0.14 + t * 1.1;
 }
