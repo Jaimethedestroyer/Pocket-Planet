@@ -13,6 +13,7 @@ import {
 import type {
   PolicyChange,
   PolityView,
+  RuinView,
   SettlementView,
   SimCommand,
   SimMessage,
@@ -25,6 +26,8 @@ export interface ChronicleLine {
   tick: number;
   text: string;
   weight: number;
+  /** Where it happened, when the event knew. Tapping the line flies there. */
+  cell?: number;
 }
 
 export class SimClient {
@@ -38,6 +41,8 @@ export class SimClient {
 
   tick = 0;
   settlements: SettlementView[] = [];
+  /** Abandoned settlements. Only replaced when the worker says they changed. */
+  ruins: RuinView[] = [];
   polities: PolityView[] = [];
   playerPolity = 0;
   totalPopulation = 0;
@@ -151,6 +156,7 @@ export class SimClient {
 
     this.tick = msg.tick;
     this.settlements = msg.settlements;
+    if (msg.ruins) this.ruins = msg.ruins;
     this.polities = msg.polities;
     this.playerPolity = msg.playerPolity;
     this.totalPopulation = msg.totalPopulation;

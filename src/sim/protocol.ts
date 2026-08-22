@@ -87,6 +87,15 @@ export interface SettlementView {
   polity: number;
   population: number;
   name: string;
+  /** Year it was founded, so a tapped town can say how old it is. */
+  founded: number;
+}
+
+/** A settlement that emptied. The renderer builds ruins where these are. */
+export interface RuinView {
+  cell: number;
+  name: string;
+  abandoned: number;
 }
 
 export interface PolityView {
@@ -94,6 +103,8 @@ export interface PolityView {
   name: string;
   alive: boolean;
   hue: number;
+  /** Cell of the seat of government. Its town gets the great work. */
+  capital: number;
   era: Era;
   tech: number;
   stability: number;
@@ -119,8 +130,14 @@ export interface SimStateMessage {
   settlements: SettlementView[];
   polities: PolityView[];
   playerPolity: number;
+  /**
+   * Abandoned settlements, or null when the set has not changed. Ruins move
+   * once a century at most, and re-sending them every quarter second would be
+   * the largest thing in this message for no reason.
+   */
+  ruins: RuinView[] | null;
   /** Events since the previous update, already rendered to text. */
-  chronicle: { tick: number; text: string; weight: number }[];
+  chronicle: { tick: number; text: string; weight: number; cell?: number }[];
   totalPopulation: number;
   livingPolities: number;
   /** The replay log, sent whenever it has grown so the client can persist it. */
@@ -160,6 +177,7 @@ export function toPolityView(p: Polity, culture: string, religion: string): Poli
     name: p.name,
     alive: p.alive,
     hue: p.hue,
+    capital: p.capital,
     era: p.era,
     tech: p.tech,
     stability: p.stability,

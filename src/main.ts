@@ -21,6 +21,8 @@ const pixelError = params.has('lod') ? Number(params.get('lod')) : undefined;
 const bloom = params.has('bloom') ? Number(params.get('bloom')) : undefined;
 const clouds = params.has('clouds') ? Number(params.get('clouds')) : undefined;
 
+const detail = params.has('detail') ? Number(params.get('detail')) : undefined;
+
 const cellCount = params.has('cells') ? Number(params.get('cells')) : undefined;
 const speed = params.has('speed') ? Number(params.get('speed')) : undefined;
 
@@ -32,6 +34,7 @@ const app = new PocketPlanetApp({
   pixelError,
   bloom,
   clouds,
+  detail,
   cellCount,
   speed,
 });
@@ -39,12 +42,20 @@ const app = new PocketPlanetApp({
 // Apply any view supplied on the query string. Handy for sharing a viewpoint
 // and for driving the screenshot tool.
 const view: ViewState = {};
-for (const key of ['lat', 'lon', 'altitude', 'heading', 'sun'] as const) {
+for (const key of ['lat', 'lon', 'altitude', 'heading', 'sun', 'tilt'] as const) {
   const raw = params.get(key);
   if (raw !== null) view[key] = Number(raw);
 }
 if (params.get('autorotate') === '0') view.autoRotate = false;
 if (Object.keys(view).length > 0) app.setView(view);
+
+// `?kit=1` swaps the world's towns for a sheet of every model in the catalogue,
+// laid out on the ground under the camera. Development only; see showcase.ts.
+// `?kit=all` swaps the world's towns for a sheet of every model in the
+// catalogue, laid out on the ground the camera is looking at; `?kit=2` shows
+// one row of six, close enough to judge. Development only; see showcase.ts.
+const kit = params.get('kit');
+if (kit !== null) app.ground.setShowcase(kit === 'all' || kit === '1' ? 'all' : Number(kit));
 
 // --- Game interface --------------------------------------------------------
 
@@ -143,6 +154,7 @@ declare global {
       skipBoot(): void;
       runYears(years: number): void;
       setSpeed(yearsPerSecond: number): void;
+      towns(): { name: string; lat: number; lon: number; tier: number; capital: boolean }[];
       pick(x: number, y: number): [number, number, number] | null;
       project(v: [number, number, number]): [number, number] | null;
       cameraTarget(): [number, number, number];
@@ -164,6 +176,29 @@ window.pocketPlanet = {
   },
   runYears: (years) => app.sim.catchUp(years),
   setSpeed: (yearsPerSecond) => app.sim.setSpeed(yearsPerSecond),
+  // Where the towns actually are. The screenshot tool needs this: a fixed
+  // latitude and longitude was fine for terrain, but a shot meant to show a
+  // city has to be aimed at one, and where cities end up depends on the seed.
+  towns: () => {
+    const positions = app.sim.cellPositions;
+    if (!positions) return [];
+    const capitals = new Set(app.sim.polities.map((p) => p.capital));
+    return app.sim.settlements
+      .map((s) => {
+        const c = s.cell * 3;
+        const x = positions[c];
+        const y = positions[c + 1];
+        const z = positions[c + 2];
+        return {
+          name: s.name,
+          lat: (Math.asin(Math.max(-1, Math.min(1, y))) * 180) / Math.PI,
+          lon: (Math.atan2(z, x) * 180) / Math.PI,
+          tier: s.tier,
+          capital: capitals.has(s.cell),
+        };
+      })
+      .sort((a, b) => b.tier - a.tier || Number(b.capital) - Number(a.capital));
+  },
   pick: (x, y) => {
     const v = app.rig.pickWorld(x, y);
     return v ? [v.x, v.y, v.z] : null;

@@ -104,6 +104,19 @@ export class Simulation {
   /** Tick each cell first became a settlement, or -1. */
   private settledAt: Int32Array;
   private settlementNames = new Map<number, string>();
+
+  /**
+   * Places that were somewhere and are not any more, and the year they
+   * emptied.
+   *
+   * Kept separately from the ruins cell flag, which is also set on land that
+   * was merely held when a state collapsed. Only somewhere that was actually
+   * *settled* leaves ruins worth finding, and only those keep their name — so
+   * a city resettled nine centuries later is resettled under the name it had.
+   */
+  private ruinedAt = new Map<number, number>();
+  /** Bumped whenever the ruin set changes, so the message can skip it. */
+  ruinVersion = 0;
   /** Cells held by each polity, rebuilt once per tick. */
   private polityCells: number[][] = [];
 
@@ -451,6 +464,8 @@ export class Simulation {
         if (this.settledAt[c] >= 0 && pop < SETTLEMENT_THRESHOLD * 0.5) {
           this.settledAt[c] = -1;
           this.cellFlags[c] |= CellFlag.Ruins;
+          this.ruinedAt.set(c, this.tick);
+          this.ruinVersion++;
         }
         continue;
       }
@@ -481,6 +496,7 @@ export class Simulation {
           detail: name,
         });
         this.cellFlags[c] &= ~CellFlag.Ruins;
+        if (this.ruinedAt.delete(c)) this.ruinVersion++;
       }
 
       this.settlements.push({
@@ -965,6 +981,24 @@ export class Simulation {
   }
 
   /* ----------------------------------------------------------- inspection */
+
+  /**
+   * Abandoned settlements, newest first.
+   *
+   * Capped, because a planet that has been running for ten thousand years
+   * accumulates more ruins than anyone will ever fly over, and the renderer
+   * only ever draws the handful nearest the camera. The cap keeps the oldest,
+   * least interesting ones out of every state message.
+   */
+  ruins(limit = 256): { cell: number; name: string; abandoned: number }[] {
+    const out: { cell: number; name: string; abandoned: number }[] = [];
+    for (const [cell, abandoned] of this.ruinedAt) {
+      out.push({ cell, name: this.settlementNames.get(cell) ?? 'a nameless place', abandoned });
+    }
+    out.sort((a, b) => b.abandoned - a.abandoned);
+    if (out.length > limit) out.length = limit;
+    return out;
+  }
 
   stats(): SimStats {
     let population = 0;

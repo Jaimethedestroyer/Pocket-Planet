@@ -22,6 +22,8 @@ const SEED = 'pocket-planet';
 const LOD = process.env.LOD ? `&lod=${process.env.LOD}` : '';
 const BLOOM = process.env.BLOOM !== undefined ? `&bloom=${process.env.BLOOM}` : '';
 const CLOUDS = process.env.CLOUDS !== undefined ? `&clouds=${process.env.CLOUDS}` : '';
+const DETAIL = process.env.DETAIL !== undefined ? `&detail=${process.env.DETAIL}` : '';
+const KIT = process.env.KIT ? `&kit=${process.env.KIT}` : '';
 const SCALE = process.env.SCALE ?? '1';
 
 /**
@@ -47,6 +49,19 @@ const SHOTS = [
   { name: 'civilization', lat: 18, lon: 40, altitude: 1400, heading: 0, sunOffset: -25, years: 900 },
   { name: 'empire', lat: 18, lon: 40, altitude: 2600, heading: 0, sunOffset: -25, years: 1100 },
   { name: 'night-lights', lat: 18, lon: 40, altitude: 1500, heading: 0, sunOffset: -150, years: 0 },
+  // Ground detail. `town` aims at a real settlement rather than at fixed
+  // coordinates, because where cities end up depends on the seed and the
+  // history — a hard-coded latitude photographs an empty hillside.
+  // The first of these carries the years so that a filtered run — which is how
+  // this gets used ninety per cent of the time — still has a town to look at.
+  // The model catalogue, on real ground, in known light. Run with KIT=1.
+  { name: 'kit', lat: 3.5, lon: 94.5, altitude: 200, heading: 0, tilt: -0.62, sunOffset: -40 },
+  { name: 'kit-low', lat: 3.5, lon: 94.5, altitude: 95, heading: 0, tilt: -0.62, sunOffset: -50 },
+  { name: 'town', town: 0, altitude: 220, heading: 40, tilt: -0.42, sunOffset: -52, years: 700 },
+  { name: 'town-street', town: 0, altitude: 26, heading: 40, tilt: -0.52, sunOffset: -64, years: 0 },
+  { name: 'town-night', town: 0, altitude: 170, heading: 40, tilt: -0.4, sunOffset: -140, years: 0 },
+  { name: 'town-second', town: 3, altitude: 140, heading: 200, tilt: -0.38, sunOffset: -44, years: 0 },
+  { name: 'town-late', town: 0, altitude: 240, heading: 90, tilt: -0.42, sunOffset: -38, years: 1200 },
   // Interface shots. `panel` opens the priorities panel before capturing.
   { name: 'interface', lat: 18, lon: 40, altitude: 1800, heading: 0, sunOffset: -30, years: 300 },
   { name: 'priorities', lat: 18, lon: 40, altitude: 1800, heading: 0, sunOffset: -30, panel: true },
@@ -116,13 +131,13 @@ page.on('console', (m) => {
 });
 page.on('pageerror', (e) => console.log(`  [page error] ${e.message}`));
 
-await page.goto(`http://localhost:${PORT}/?seed=${SEED}&hud=1&autorotate=0&scale=${SCALE}${LOD}${BLOOM}${CLOUDS}`, {
+await page.goto(`http://localhost:${PORT}/?seed=${SEED}&hud=1&autorotate=0&speed=0&scale=${SCALE}${LOD}${BLOOM}${CLOUDS}${DETAIL}${KIT}`, {
   waitUntil: 'load',
 });
 await page.waitForFunction('window.pocketPlanet !== undefined', null, { timeout: 30000 });
 
 /** Spin the frame loop until the terrain reports it has nothing queued. */
-async function settle(timeoutMs = 180000) {
+async function settle(timeoutMs = Number(process.env.SETTLE_MS ?? 180000)) {
   const start = Date.now();
   let stableFrames = 0;
   while (Date.now() - start < timeoutMs) {
@@ -144,7 +159,7 @@ await page.evaluate('window.pocketPlanet.setSpeed(0)');
 
 let simulatedYears = 0;
 for (const shot of shots) {
-  const { name, years, sunOffset, panel, ...view } = shot;
+  const { name, years, sunOffset, panel, town, ...view } = shot;
   void sunOffset;
   if (years) {
     // Advance in bounded chunks: the worker caps a single catch-up so that a
@@ -154,6 +169,18 @@ for (const shot of shots) {
       await page.waitForTimeout(150);
     }
     simulatedYears += years;
+  }
+  if (town !== undefined) {
+    const list = await page.evaluate(() => window.pocketPlanet.towns());
+    if (list.length === 0) {
+      console.log(`  ${name.padEnd(18)} SKIPPED (no settlements yet)`);
+      continue;
+    }
+    const target = list[Math.min(town, list.length - 1)];
+    view.lat = target.lat;
+    view.lon = target.lon;
+    view.sun = target.lon + sunOffset;
+    console.log(`  ${name.padEnd(18)} aiming at ${target.name} (tier ${target.tier})`);
   }
   await page.evaluate((v) => window.pocketPlanet.setView(v), { ...view, autoRotate: false });
   if (panel) {
@@ -174,7 +201,9 @@ for (const shot of shots) {
       `draws ${String(stats.drawCalls).padStart(3)}  ` +
       `year ${String(stats.year).padStart(4)}  ` +
       `states ${stats.states}  ` +
-      `towns ${stats.settlements}`,
+      `towns ${stats.settlements}  ` +
+      `built ${stats.towns}/${stats.buildings}b/${stats.plants}p/${stats.people}h  ` +
+      `plan ${stats.planMs.toFixed(1)}ms`,
   );
 }
 

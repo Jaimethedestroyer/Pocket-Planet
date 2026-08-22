@@ -27,6 +27,8 @@ let lastSentTick = -1;
 let lastChronicleTick = 0;
 let ownershipDirty = true;
 let ownerSignature = 0;
+/** Last ruin-set version sent, so an unchanged set costs nothing. */
+let lastRuinVersion = -1;
 /** Every policy change, in tick order. This plus the seed is the save file. */
 let policyLog: PolicyChange[] = [];
 let policyLogSent = 0;
@@ -136,7 +138,9 @@ function sendState(): void {
       polity: s.polity,
       population: s.population,
       name: s.name,
+      founded: s.founded,
     })),
+    ruins: sim.ruinVersion !== lastRuinVersion ? sim.ruins() : null,
     polities: sim.polities
       .filter((p) => p.alive)
       .map((p) =>
@@ -162,6 +166,7 @@ function sendState(): void {
   }
 
   lastSentTick = sim.tick;
+  lastRuinVersion = sim.ruinVersion;
   post(message, territory ? [territory.buffer] : []);
 }
 
