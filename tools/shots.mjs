@@ -70,6 +70,11 @@ const SHOTS = [
   { name: 'city-close', town: 0, altitude: 120, heading: 25, tilt: -0.5, sunOffset: -56, frame: true },
   { name: 'city-street', town: 0, altitude: 38, heading: 25, tilt: -0.52, sunOffset: -66, frame: true },
   { name: 'city-night', town: 0, altitude: 260, heading: 90, tilt: -0.5, sunOffset: -142, frame: true },
+  // The region rather than the town: high enough that several settlements and
+  // the roads between them are in frame at once, which is the only altitude at
+  // which a road network can be judged at all. Last in the list, so it neither
+  // advances history for the shots above it nor needs any of its own.
+  { name: 'region', town: 0, altitude: 780, heading: 40, tilt: -0.55, sunOffset: -46, clouds: 0, frame: true },
   // Tap to inspect: aim at a town, then tap it and capture the panel.
   { name: 'inspect', town: 0, altitude: 900, heading: 0, tilt: -0.5, sunOffset: -34, tapTown: true, frame: true },
   // Interface shots. `panel` opens the priorities panel before capturing.
@@ -175,9 +180,13 @@ await page.evaluate('window.pocketPlanet.setSpeed(0)');
 
 let simulatedYears = 0;
 for (const shot of shots) {
-  const { name, years, sunOffset, panel, town, tapTown, ...view } = shot;
+  const { name, years, sunOffset, panel, town, tapTown, clouds, ...view } = shot;
   void tapTown;
   void sunOffset;
+  // Weather per viewpoint. The road network between towns is the one thing
+  // here that cloud shadow makes genuinely unreadable, and clearing the sky
+  // for the whole run would change every other reference image.
+  await page.evaluate((c) => window.pocketPlanet.setClouds(c), clouds ?? null);
   if (years) {
     // Advance in bounded chunks: the worker caps a single catch-up so that a
     // long absence cannot block it for seconds on end.

@@ -12,6 +12,7 @@
     "shot": "node tools/shots.mjs",
     "soak": "tsx tools/soak.ts",
     "probe": "tsx tools/probe-terrain.ts",
+    "probe-town": "tsx tools/probe-town.ts",
     "history": "tsx tools/history.ts",
     "verify-save": "node tools/verify-save.mjs",
     "verify-motion": "node tools/verify-motion.mjs",

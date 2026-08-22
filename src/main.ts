@@ -198,6 +198,7 @@ declare global {
       app: PocketPlanetApp;
       setView(view: ViewState): void;
       isSettled(): boolean;
+      setClouds(coverage: number | null): void;
       stats(): Record<string, number>;
       skipBoot(): void;
       runYears(years: number): void;
@@ -219,6 +220,7 @@ window.pocketPlanet = {
     bootStart = performance.now();
   },
   isSettled: () => app.isSettled(),
+  setClouds: (coverage) => app.setClouds(coverage),
   stats: () => app.getStats(),
   skipBoot: () => {
     booted = true;

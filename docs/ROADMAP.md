@@ -63,15 +63,18 @@ What remains here is to drive coverage from the simulation's own moisture and
 temperature fields, so that a drought actually looks like one and the wet belts sit
 where the climate model already says they are.
 
-### 4. Trade routes and roads · **M**
+### 4. Trade routes and roads · **S** *(half done)*
 
-At mid zoom there is nothing between "coloured territory blob" and "dot of a city". Arcs
-between trading settlements — thin, glowing at night, thickening with volume, dimming
-when a war closes them — fill that gap and make the Trade dial visible for the first
-time.
+At mid zoom there was nothing between "coloured territory blob" and "dot of a city".
+The geometric half of this now exists: `render/ground/network.ts` routes real roads
+between neighbouring settlements, terrain-aware and cached per pair of cells, and a
+region reads as a network rather than as a scatter of unrelated towns.
 
-Needs trade routes to become real objects in the simulation rather than an aggregate
-number, which is worth doing anyway.
+What is missing is the *meaning*. The links are chosen by proximity and allegiance,
+not by trade, so the Trade dial still changes nothing visible. Making trade routes
+real objects in the simulation rather than an aggregate number — worth doing anyway —
+would let the same geometry thicken with volume, glow at night and go dark when a war
+closes it, which is the half that was actually asked for.
 
 ### 5. Named rulers and dynasties · **S**
 
