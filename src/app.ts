@@ -155,7 +155,8 @@ export class PocketPlanetApp {
     );
 
     if (opts.bloom !== undefined) this.pipeline.setBloom(opts.bloom);
-    if (opts.clouds !== undefined) this.pipeline.setCloudCoverage(opts.clouds);
+    this.defaultClouds = this.pipeline.atmosphere.uCloudCoverage.value as number;
+    if (opts.clouds !== undefined) this.setClouds(opts.clouds);
 
     // The simulation runs in its own worker on its own clock, so history
     // advances at the same rate whether the renderer is managing 60 fps or 20.
@@ -284,6 +285,20 @@ export class PocketPlanetApp {
   }
 
   /** True when the LOD system has nothing left to build for the current view. */
+  /**
+   * Cloud coverage, or the world's own value when given null.
+   *
+   * Exposed for the screenshot harness, which needs one viewpoint clear while
+   * the rest keep their weather: the shot that shows the road network between
+   * towns is unreadable under cloud shadow, and turning the sky off for the
+   * whole run would change every other reference image.
+   */
+  setClouds(coverage: number | null): void {
+    this.pipeline.setCloudCoverage(coverage ?? this.defaultClouds);
+  }
+
+  private defaultClouds = 0;
+
   isSettled(): boolean {
     const t = this.terrain.getStats();
     return this.terrain.isReady() && t.pending === 0 && t.queued === 0;
