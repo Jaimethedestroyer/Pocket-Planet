@@ -187,7 +187,7 @@ export class Wilderness {
         .normalize();
 
       const ground = this.field.sample(this.dir.x, this.dir.y, this.dir.z, 0.5);
-      if (ground.height < 1.2) continue;
+      if (ground.height < 1.8) continue;
 
       // Thin out on anything a tree would fall off, and above the treeline.
       if (ground.temperature < 0.14) continue;
