@@ -119,8 +119,12 @@ balance tools. Seed plus player-event log reproduces any history exactly.
 
 ## Where the interesting problems are
 
-[`docs/ROADMAP.md`](docs/ROADMAP.md) is what happens next and why, in order.
-[`docs/PLAN.md`](docs/PLAN.md) is the full technical plan. The parts worth reading:
+[`docs/STATUS.md`](docs/STATUS.md) is where the project actually is — read it
+first. [`docs/NEXT-PASS.md`](docs/NEXT-PASS.md) is the brief for the work in
+front of it, [`docs/ASSET-STYLE.md`](docs/ASSET-STYLE.md) specifies the sprite
+sheets, [`docs/ROADMAP.md`](docs/ROADMAP.md) is what happens next and why, and
+[`docs/PLAN.md`](docs/PLAN.md) is the full technical plan. The parts worth
+reading:
 
 - **Why the atmosphere's scale height follows the camera.** How far you can see before the
   air whites out and how blue the sky is overhead are not independent — their ratio is
