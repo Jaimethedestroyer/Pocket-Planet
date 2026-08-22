@@ -462,3 +462,130 @@ body {
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
+
+/* --- Inspector ----------------------------------------------------------- */
+
+/* The panel a tap opens. Anchored to the same bottom edge as the dock so it
+   stays within a thumb's reach, and capped in height so it never covers the
+   planet it is describing. */
+.pp-inspect {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
+  max-width: 380px;
+  max-height: 52vh;
+  overflow-y: auto;
+  padding: 14px 15px 13px;
+  border: 1px solid var(--edge);
+  border-radius: 14px;
+  background: rgba(7, 11, 19, 0.88);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  z-index: 4;
+}
+
+.pp-inspect.pp-in {
+  animation: pp-in 260ms ease both;
+}
+
+.pp-inspect-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pp-inspect-close:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.pp-inspect-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+  padding-right: 26px;
+}
+
+.pp-inspect-head b {
+  display: block;
+  font-size: 15px;
+  letter-spacing: 0.01em;
+  color: #f0e6cf;
+}
+
+.pp-inspect-head i {
+  display: block;
+  margin-top: 2px;
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+
+.pp-inspect-body p {
+  margin: 0 0 5px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #c1cbda;
+}
+
+/* A place's own history, indented under it. Same shape as the feed so the two
+   read as the same kind of thing. */
+.pp-inspect-lines {
+  margin-top: 9px;
+}
+
+.pp-inspect-lines:empty {
+  display: none;
+}
+
+.pp-inspect-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 0;
+  border-top: 1px solid rgba(150, 180, 220, 0.09);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #a9b5c6;
+}
+
+.pp-inspect-line span {
+  flex: 0 0 auto;
+  min-width: 32px;
+  color: #6c7b91;
+  font-variant-numeric: tabular-nums;
+}
+
+.pp-inspect-go {
+  width: 100%;
+  margin-top: 11px;
+  padding: 9px;
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+/* A chronicle line that knows where it happened is somewhere you can go. The
+   feed as a whole stays transparent to input — only the lines that lead
+   somewhere take a tap, so the planet behind the rest of it still drags. */
+.pp-line.here {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.pp-line.here:hover {
+  background: rgba(20, 30, 48, 0.82);
+  color: var(--ink);
+}

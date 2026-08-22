@@ -38,6 +38,8 @@ export class SimClient {
 
   cellPositions: Float32Array | null = null;
   cellHeights: Float32Array | null = null;
+  /** Which polity holds each cell. Zero is unclaimed. */
+  cellOwner: Uint16Array | null = null;
 
   tick = 0;
   settlements: SettlementView[] = [];
@@ -162,6 +164,7 @@ export class SimClient {
     this.totalPopulation = msg.totalPopulation;
     this.livingPolities = msg.livingPolities;
 
+    if (msg.owner) this.cellOwner = msg.owner;
     if (msg.territory) {
       this.territoryTexture.image.data.set(msg.territory);
       this.territoryTexture.needsUpdate = true;

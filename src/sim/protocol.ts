@@ -127,6 +127,14 @@ export interface SimStateMessage {
    * render as painted curves rather than as the cell graph underneath.
    */
   territory: Uint8ClampedArray | null;
+  /**
+   * Which polity holds each cell, sent alongside the territory field.
+   *
+   * The painted field is a blended image and cannot be read backwards at a
+   * border; this is the ground truth, and at two bytes a cell it is a rounding
+   * error next to the half-megabyte texture it travels with.
+   */
+  owner: Uint16Array | null;
   settlements: SettlementView[];
   polities: PolityView[];
   playerPolity: number;

@@ -62,6 +62,8 @@ const SHOTS = [
   { name: 'town-night', town: 0, altitude: 170, heading: 40, tilt: -0.4, sunOffset: -140, years: 0 },
   { name: 'town-second', town: 3, altitude: 140, heading: 200, tilt: -0.38, sunOffset: -44, years: 0 },
   { name: 'town-late', town: 0, altitude: 240, heading: 90, tilt: -0.42, sunOffset: -38, years: 1200 },
+  // Tap to inspect: aim at a town, then tap it and capture the panel.
+  { name: 'inspect', town: 0, altitude: 900, heading: 0, tilt: -0.5, sunOffset: -34, tapTown: true },
   // Interface shots. `panel` opens the priorities panel before capturing.
   { name: 'interface', lat: 18, lon: 40, altitude: 1800, heading: 0, sunOffset: -30, years: 300 },
   { name: 'priorities', lat: 18, lon: 40, altitude: 1800, heading: 0, sunOffset: -30, panel: true },
@@ -159,7 +161,8 @@ await page.evaluate('window.pocketPlanet.setSpeed(0)');
 
 let simulatedYears = 0;
 for (const shot of shots) {
-  const { name, years, sunOffset, panel, town, ...view } = shot;
+  const { name, years, sunOffset, panel, town, tapTown, ...view } = shot;
+  void tapTown;
   void sunOffset;
   if (years) {
     // Advance in bounded chunks: the worker caps a single catch-up so that a
@@ -183,6 +186,20 @@ for (const shot of shots) {
     console.log(`  ${name.padEnd(18)} aiming at ${target.name} (tier ${target.tier})`);
   }
   await page.evaluate((v) => window.pocketPlanet.setView(v), { ...view, autoRotate: false });
+  if (shot.tapTown) {
+    // Tap the town at the centre of the view. Its marker is projected rather
+    // than guessed, so this works wherever the seed put the city.
+    const at = await page.evaluate(() => {
+      const target = window.pocketPlanet.cameraTarget();
+      return window.pocketPlanet.project(target);
+    });
+    if (at) {
+      const kind = await page.evaluate(([x, y]) => window.pocketPlanet.tap(x, y), at);
+      console.log(`  ${name.padEnd(18)} tapped at ${at.map(Math.round).join(',')} -> ${kind}`);
+    } else {
+      console.log(`  ${name.padEnd(18)} target not on screen, no tap`);
+    }
+  }
   if (panel) {
     await page.evaluate(() => {
       const toggle = document.getElementById('pp-policy-toggle');

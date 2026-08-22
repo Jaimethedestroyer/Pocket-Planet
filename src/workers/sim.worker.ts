@@ -132,6 +132,7 @@ function sendState(): void {
     type: 'state',
     tick: sim.tick,
     territory,
+    owner: territory ? sim.owner.slice() : null,
     settlements: sim.settlements.map((s) => ({
       cell: s.cell,
       tier: s.tier,
@@ -167,7 +168,10 @@ function sendState(): void {
 
   lastSentTick = sim.tick;
   lastRuinVersion = sim.ruinVersion;
-  post(message, territory ? [territory.buffer] : []);
+  const transfer: Transferable[] = [];
+  if (territory) transfer.push(territory.buffer);
+  if (message.owner) transfer.push(message.owner.buffer);
+  post(message, transfer);
 }
 
 /**

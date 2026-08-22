@@ -1,5 +1,6 @@
 import { PocketPlanetApp } from './app';
 import { Hud } from './ui/hud';
+import { Inspector } from './ui/inspector';
 import { Vector3 } from 'three';
 import { PLANET_RADIUS } from './planet/config';
 import type { ViewState } from './app';
@@ -49,8 +50,6 @@ for (const key of ['lat', 'lon', 'altitude', 'heading', 'sun', 'tilt'] as const)
 if (params.get('autorotate') === '0') view.autoRotate = false;
 if (Object.keys(view).length > 0) app.setView(view);
 
-// `?kit=1` swaps the world's towns for a sheet of every model in the catalogue,
-// laid out on the ground under the camera. Development only; see showcase.ts.
 // `?kit=all` swaps the world's towns for a sheet of every model in the
 // catalogue, laid out on the ground the camera is looking at; `?kit=2` shows
 // one row of six, close enough to judge. Development only; see showcase.ts.
@@ -61,10 +60,34 @@ if (kit !== null) app.ground.setShowcase(kit === 'all' || kit === '1' ? 'all' : 
 
 const gameHud = new Hud(app.sim);
 document.body.appendChild(gameHud.root);
+
+const inspector = new Inspector(app.sim, app.field, app.camera, canvas);
+document.body.appendChild(inspector.root);
+
+// Tapping the world opens the panel on whatever was under the finger; tapping
+// again on nothing closes it. The rig decides what counts as a tap, because it
+// is the only thing that knows whether the gesture turned into a drag.
+app.rig.onTap = (x, y) => {
+  inspector.tap(x, y, app.rig.pickWorld(x, y));
+};
+
+const goTo = (direction: Vector3, altitude?: number): void => {
+  app.rig.flyTo(direction, altitude);
+};
+inspector.onGoTo = goTo;
+gameHud.onGoToCell = (cell) => {
+  const pick = inspector.showCell(cell);
+  // Only close in on somewhere the camera is not already looking at; from
+  // ground level, a chronicle line about the next valley should not throw the
+  // view back into orbit.
+  if (pick) goTo(pick.direction, Math.min(app.rig.altitude, 900));
+};
+
 const previousOnState = app.sim.onState;
 app.sim.onState = () => {
   previousOnState?.();
   gameHud.update();
+  inspector.refresh();
 };
 app.sim.onDigest = (lines) => gameHud.showDigest(lines);
 
@@ -156,6 +179,8 @@ declare global {
       setSpeed(yearsPerSecond: number): void;
       towns(): { name: string; lat: number; lon: number; tier: number; capital: boolean }[];
       pick(x: number, y: number): [number, number, number] | null;
+      tap(x: number, y: number): string | null;
+      goToCell(cell: number): void;
       project(v: [number, number, number]): [number, number] | null;
       cameraTarget(): [number, number, number];
     };
@@ -198,6 +223,17 @@ window.pocketPlanet = {
         };
       })
       .sort((a, b) => b.tier - a.tier || Number(b.capital) - Number(a.capital));
+  },
+  // Drive the inspector from the screenshot harness. Synthesising a pointer
+  // gesture through the DOM would test the browser's event plumbing rather
+  // than the game's, and would need a fake drag threshold to boot.
+  tap: (x, y) => {
+    const pick = inspector.tap(x, y, app.rig.pickWorld(x, y));
+    return pick ? pick.kind : null;
+  },
+  goToCell: (cell) => {
+    const pick = inspector.showCell(cell);
+    if (pick) app.rig.flyTo(pick.direction, 190);
   },
   pick: (x, y) => {
     const v = app.rig.pickWorld(x, y);
