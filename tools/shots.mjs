@@ -55,15 +55,20 @@ const SHOTS = [
   // The first of these carries the years so that a filtered run — which is how
   // this gets used ninety per cent of the time — still has a town to look at.
   // The model catalogue, on real ground, in known light. Run with KIT=1.
-  { name: 'kit', lat: 3.5, lon: 94.5, altitude: 200, heading: 0, tilt: -0.62, sunOffset: -40 },
-  { name: 'kit-low', lat: 3.5, lon: 94.5, altitude: 95, heading: 0, tilt: -0.62, sunOffset: -50 },
-  { name: 'town', town: 0, altitude: 220, heading: 40, tilt: -0.42, sunOffset: -52, years: 700 },
-  { name: 'town-street', town: 0, altitude: 26, heading: 40, tilt: -0.52, sunOffset: -64, years: 0 },
-  { name: 'town-night', town: 0, altitude: 170, heading: 40, tilt: -0.4, sunOffset: -140, years: 0 },
-  { name: 'town-second', town: 3, altitude: 140, heading: 200, tilt: -0.38, sunOffset: -44, years: 0 },
-  { name: 'town-late', town: 0, altitude: 240, heading: 90, tilt: -0.42, sunOffset: -38, years: 1200 },
+  { name: 'kit', lat: 3.5, lon: 94.5, altitude: 200, heading: 0, tilt: -0.62, sunOffset: -40, frame: true },
+  { name: 'kit-low', lat: 3.5, lon: 94.5, altitude: 95, heading: 0, tilt: -0.62, sunOffset: -50, frame: true },
+  { name: 'town', town: 0, altitude: 220, heading: 40, tilt: -0.42, sunOffset: -52, years: 700, frame: true },
+  { name: 'town-street', town: 0, altitude: 26, heading: 40, tilt: -0.52, sunOffset: -64, years: 0, frame: true },
+  { name: 'town-night', town: 0, altitude: 170, heading: 40, tilt: -0.4, sunOffset: -140, years: 0, frame: true },
+  { name: 'town-second', town: 3, altitude: 140, heading: 200, tilt: -0.38, sunOffset: -44, years: 0, frame: true },
+  // A grown city, at three altitudes. Eighteen hundred more years gets the
+  // largest settlement to a tier where it has streets rather than a clearing.
+  { name: 'city', town: 0, altitude: 330, heading: 90, tilt: -0.52, sunOffset: -44, years: 2200, frame: true },
+  { name: 'city-close', town: 0, altitude: 120, heading: 25, tilt: -0.5, sunOffset: -56, frame: true },
+  { name: 'city-street', town: 0, altitude: 24, heading: 25, tilt: -0.55, sunOffset: -66, frame: true },
+  { name: 'city-night', town: 0, altitude: 260, heading: 90, tilt: -0.5, sunOffset: -142, frame: true },
   // Tap to inspect: aim at a town, then tap it and capture the panel.
-  { name: 'inspect', town: 0, altitude: 900, heading: 0, tilt: -0.5, sunOffset: -34, tapTown: true },
+  { name: 'inspect', town: 0, altitude: 900, heading: 0, tilt: -0.5, sunOffset: -34, tapTown: true, frame: true },
   // Interface shots. `panel` opens the priorities panel before capturing.
   { name: 'interface', lat: 18, lon: 40, altitude: 1800, heading: 0, sunOffset: -30, years: 300 },
   { name: 'priorities', lat: 18, lon: 40, altitude: 1800, heading: 0, sunOffset: -30, panel: true },

@@ -27,7 +27,7 @@ import {
   POLICY_BUDGET,
   POLICY_COUNT,
 } from './types';
-import type { Culture, Polity, Religion, Settlement, SimEvent } from './types';
+import type { Culture, Polity, Religion, Settlement, SimEvent, Wonder } from './types';
 
 /* ------------------------------------------------------------------ tuning */
 
@@ -36,7 +36,52 @@ const BASE_CAPACITY = 900;
 const GROWTH_RATE = 0.022;
 /** Population at which a cell counts as a settlement. */
 const SETTLEMENT_THRESHOLD = 420;
-const SETTLEMENT_TIERS = [420, 2200, 8000, 26000, 72000, 180000];
+/**
+ * Population at which a settlement becomes a village, a town, a city and so on.
+ *
+ * Scaled to what a *cell* can actually hold, not to a real city. On a graph of
+ * four thousand cells one cell is fifteen hundred square kilometres and tops
+ * out around nine thousand people, so the original thresholds — which ran to a
+ * hundred and eighty thousand — meant half of every planet was a hamlet, the
+ * other half a village, and nothing else existed. A world where no settlement
+ * can ever become a city is not a world with big cities missing; it is a world
+ * where five of the six words are dead.
+ */
+const SETTLEMENT_TIERS = [420, 1400, 2600, 4200, 6000, 7800];
+
+/**
+ * What a great work costs, and how long before a state builds another.
+ *
+ * The cost is a large slice of a healthy treasury rather than a trickle: a
+ * wonder should be something a civilization visibly paid for, and should be
+ * felt in the century after it. The interval is what stops a rich state
+ * producing one every generation and turning a landmark into street furniture.
+ */
+const WONDER_COST = 1500;
+const WONDER_INTERVAL = 320;
+/** How large a state has to be before it thinks in centuries. */
+const WONDER_POPULATION = 22000;
+
+/** What each age builds, by the name of the model that stands for it. */
+const WONDER_KINDS: Record<Era, string[]> = {
+  [Era.Primitive]: ['stonecircle', 'greathall'],
+  [Era.Ancient]: ['ziggurat', 'temple', 'obelisk', 'colossus'],
+  [Era.Medieval]: ['cathedral', 'keep', 'colossus'],
+  [Era.Industrial]: ['clocktower', 'station', 'colossus'],
+};
+
+const WONDER_TITLES: Record<string, string> = {
+  stonecircle: 'The Standing Stones',
+  greathall: 'The Great Hall',
+  ziggurat: 'The Ziggurat',
+  temple: 'The Great Temple',
+  obelisk: 'The Obelisk',
+  colossus: 'The Colossus',
+  cathedral: 'The Cathedral',
+  keep: 'The Citadel',
+  clocktower: 'The Great Clock',
+  station: 'The Grand Terminus',
+};
 
 const POLICY_INDEX = {
   trade: 0,
@@ -117,6 +162,14 @@ export class Simulation {
   private ruinedAt = new Map<number, number>();
   /** Bumped whenever the ruin set changes, so the message can skip it. */
   ruinVersion = 0;
+
+  /** Great works, by the cell they stand on. See types.ts for why the cell. */
+  wonders: Wonder[] = [];
+  /** Bumped whenever a wonder is raised, so the message can skip the list. */
+  wonderVersion = 0;
+  private wonderAt = new Map<number, Wonder>();
+  /** Tick each polity last completed one, so they do not come in clusters. */
+  private lastWonder = new Map<number, number>();
   /** Cells held by each polity, rebuilt once per tick. */
   private polityCells: number[][] = [];
 
@@ -302,6 +355,7 @@ export class Simulation {
     this.phaseEconomy();
     this.phaseKnowledge();
     this.phaseCulture();
+    this.phaseWonders();
     this.phaseStability();
     this.phaseWar();
     this.phaseCrisis();
@@ -601,6 +655,85 @@ export class Simulation {
           religion: born.id,
         });
       }
+    }
+  }
+
+  /**
+   * Great works.
+   *
+   * A rich, settled, technically capable state with a real capital builds one,
+   * and then does not build another for two centuries. The cost is deliberately
+   * a chunk of the treasury rather than a trickle: a wonder should be a choice
+   * a civilization visibly paid for, and a state that builds one should feel
+   * the century after it.
+   *
+   * Nothing here is per-tick expensive. Only the capital is considered, only
+   * for polities past the wealth gate, and the gate is high enough that a
+   * three-thousand-year world produces a couple of dozen of them.
+   */
+  private phaseWonders(): void {
+    for (const polity of this.polities) {
+      if (!polity.alive) continue;
+      if (polity.treasury < WONDER_COST) continue;
+      if (polity.stability < 0.5) continue;
+      if (polity.population < WONDER_POPULATION) continue;
+      if (this.tick - (this.lastWonder.get(polity.id) ?? -9999) < WONDER_INTERVAL) continue;
+
+      // The largest place that does not already have one, which is usually
+      // the capital and does not have to be. Insisting on the capital makes
+      // wonders far rarer than intended: capitals are reused by successor
+      // states, so once a prime cell has a ziggurat nothing can ever be built
+      // there again, and a world ends up with two or three great works in
+      // three thousand years rather than a dozen.
+      const held = this.polityCells[polity.id];
+      if (!held || held.length === 0) continue;
+      let cell = -1;
+      let best = SETTLEMENT_TIERS[1];
+      if (!this.wonderAt.has(polity.capital) && this.owner[polity.capital] === polity.id) {
+        cell = polity.capital;
+        best = this.population[polity.capital];
+      }
+      for (const c of held) {
+        if (this.wonderAt.has(c)) continue;
+        if (this.population[c] > best) {
+          best = this.population[c];
+          cell = c;
+        }
+      }
+      if (cell < 0) continue;
+
+      // One chance in fifty per eligible year: a state sits at the threshold
+      // for a while before it commits, which is what keeps two neighbours from
+      // breaking ground in the same decade every time.
+      const rng = makeRng(mixSeed(this.seed, this.tick * 7919 + polity.id * 131));
+      if (!rng.chance(0.018)) continue;
+
+      const catalogue = WONDER_KINDS[polity.era] ?? WONDER_KINDS[Era.Primitive];
+      const kind = catalogue[rng.int(0, catalogue.length)];
+      const place =
+        this.settlementNames.get(cell) ?? this.nameGen(this.cultureOf[cell]).settlement();
+      const wonder: Wonder = {
+        cell,
+        kind,
+        built: this.tick,
+        builder: polity.id,
+        builderName: polity.name,
+        name: `${WONDER_TITLES[kind] ?? 'The Great Work'} of ${place}`,
+      };
+      this.wonders.push(wonder);
+      this.wonderAt.set(cell, wonder);
+      this.wonderVersion++;
+      this.lastWonder.set(polity.id, this.tick);
+      polity.treasury -= WONDER_COST;
+
+      this.emit({
+        tick: this.tick,
+        kind: 'wonder',
+        weight: 0.85,
+        polity: polity.id,
+        cell,
+        detail: wonder.name,
+      });
     }
   }
 
@@ -998,6 +1131,11 @@ export class Simulation {
     out.sort((a, b) => b.abandoned - a.abandoned);
     if (out.length > limit) out.length = limit;
     return out;
+  }
+
+  /** Every great work still standing, newest first. */
+  wonderList(): Wonder[] {
+    return this.wonders.slice().sort((a, b) => b.built - a.built);
   }
 
   stats(): SimStats {

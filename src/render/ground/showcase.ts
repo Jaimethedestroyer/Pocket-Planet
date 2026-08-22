@@ -107,6 +107,7 @@ export function kitShowcase(
       scale: new THREE.Vector3(1, 1, 1),
       wall: samplePalette(style.wallA, style.wallB, 0.55, 0),
       roof: samplePalette(style.roofA, style.roofB, 0.5, 0),
+      style: style.courses,
     });
   });
 

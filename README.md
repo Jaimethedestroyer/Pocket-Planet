@@ -42,7 +42,9 @@ Deploys to Vercel as-is: Vite preset, `npm run build`, output `dist`.
 | `seed=name` | World seed |
 | `quality=low\|medium\|high` | Override the auto-detected quality tier |
 | `hud=1` | Show the performance HUD (or press `H`) |
-| `lat` `lon` `altitude` `heading` `sun` | Jump to a viewpoint, in degrees and metres |
+| `lat` `lon` `altitude` `heading` `sun` `tilt` | Jump to a viewpoint, in degrees and metres |
+| `detail=0.5` | How far out towns are built. Zero switches ground detail off |
+| `kit=all` | Draw the model catalogue on the ground instead of the world's towns |
 | `scale=0.75` | Internal render resolution multiplier |
 | `speed=20` | Years of history per real second |
 | `cells=8192` | Simulation graph resolution |
@@ -67,6 +69,12 @@ The planet, the simulation living on it, and an interface to nudge it.
   below about four pixels; whatever fades out of the geometry becomes roughness instead,
   so the sun's reflection broadens into real glitter rather than the sea going glassy as
   you climb. Shorelines surge in and out, break into foam, and refract the sea floor.
+- **Towns you can walk into.** Below about a kilometre a settlement stops being a marker
+  and becomes a place: streets laid first, buildings hung off them, fields beyond the last
+  house, and people walking in the final few metres of a descent. Twenty-nine models,
+  four eras, all procedural — nothing in this game ships as an asset.
+- **Ruins that are real places.** A settlement that empties leaves its name and its stones
+  for someone to find and resettle centuries later.
 - **A visual regression harness** that drives the camera to fixed viewpoints and captures
   them headlessly.
 
@@ -81,6 +89,9 @@ The planet, the simulation living on it, and an interface to nudge it.
   `npm run verify-save` proves it in a real browser on every change.
 - **Offline progress.** Time keeps passing while the game is closed; coming back opens
   on what happened while you were away.
+- **Tap anything.** A town gives you its name, its age, who rules it and what it has
+  lived through; open ground gives you the climate and who claims it. Chronicle lines
+  that know where they happened are doorways — tap one and the camera flies there.
 
 | | |
 |---|---|
@@ -111,6 +122,14 @@ balance tools. Seed plus player-event log reproduces any history exactly.
 - **Why there are no citizen agents.** Population is a scalar; the people you see are
   renderer decoration. That is what makes 143 years of offline progress resolvable in
   milliseconds.
+- **Why a town is planned streets-first.** Scattering buildings and then connecting them
+  gives a road network that looks like a road network and a town that does not look like
+  a town. Real settlements are frontage on a route; laying the route first and hanging
+  buildings off it gets terraces, corners and squares for free.
+- **Why buildings need light that terrain does not.** Terrain is draped over a sphere, so
+  almost all of it faces the sky. A building is four vertical walls and at any hour one of
+  them faces away from the sun — and with only the terrain's thin ambient that wall is not
+  shadowed, it is black.
 - **Why the balance harness is scheduled before the fun parts.** The hard problem in this
   genre is not rendering; it's economies drifting into degenerate equilibria over long
   horizons.

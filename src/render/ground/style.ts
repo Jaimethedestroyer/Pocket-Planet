@@ -50,6 +50,8 @@ export interface TownStyle {
   spread: number;
   /** Window emission at night, 0..1. A primitive town is nearly dark. */
   lamps: number;
+  /** How strongly walls read as courses of a block material, 0..1. */
+  courses: number;
 }
 
 const BASE: Record<Era, Omit<TownStyle, 'era'>> = {
@@ -75,6 +77,7 @@ const BASE: Record<Era, Omit<TownStyle, 'era'>> = {
     layout: 'cluster',
     spread: 0.72,
     lamps: 0.30,
+    courses: 0.12,
   },
   [Era.Ancient]: {
     houses: [
@@ -99,6 +102,7 @@ const BASE: Record<Era, Omit<TownStyle, 'era'>> = {
     layout: 'grid',
     spread: 0.85,
     lamps: 0.52,
+    courses: 0.55,
   },
   [Era.Medieval]: {
     houses: [
@@ -125,6 +129,7 @@ const BASE: Record<Era, Omit<TownStyle, 'era'>> = {
     layout: 'organic',
     spread: 1.0,
     lamps: 0.72,
+    courses: 0.7,
   },
   [Era.Industrial]: {
     houses: [
@@ -149,6 +154,7 @@ const BASE: Record<Era, Omit<TownStyle, 'era'>> = {
     layout: 'avenue',
     spread: 1.25,
     lamps: 1.0,
+    courses: 1.0,
   },
 };
 

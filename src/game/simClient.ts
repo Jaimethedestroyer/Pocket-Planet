@@ -15,6 +15,7 @@ import type {
   PolityView,
   RuinView,
   SettlementView,
+  WonderView,
   SimCommand,
   SimMessage,
 } from '../sim/protocol';
@@ -45,6 +46,8 @@ export class SimClient {
   settlements: SettlementView[] = [];
   /** Abandoned settlements. Only replaced when the worker says they changed. */
   ruins: RuinView[] = [];
+  /** Great works. Same: replaced only when one is raised. */
+  wonders: WonderView[] = [];
   polities: PolityView[] = [];
   playerPolity = 0;
   totalPopulation = 0;
@@ -159,6 +162,7 @@ export class SimClient {
     this.tick = msg.tick;
     this.settlements = msg.settlements;
     if (msg.ruins) this.ruins = msg.ruins;
+    if (msg.wonders) this.wonders = msg.wonders;
     this.polities = msg.polities;
     this.playerPolity = msg.playerPolity;
     this.totalPopulation = msg.totalPopulation;

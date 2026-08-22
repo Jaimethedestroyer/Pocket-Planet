@@ -118,9 +118,56 @@ export class CameraRig {
    * feel like arriving somewhere rather than falling onto a map.
    */
   private get tilt(): number {
-    const t = THREE.MathUtils.smoothstep(this.altitude, 12, PLANET_RADIUS * 0.55);
+    return this.tiltAt(this.altitude);
+  }
+
+  private tiltAt(altitude: number): number {
+    const t = THREE.MathUtils.smoothstep(altitude, 12, PLANET_RADIUS * 0.55);
     return THREE.MathUtils.clamp((1 - t) * 1.18 + this.tiltOffset, 0, 1.45);
   }
+
+  /**
+   * Where the camera has to sit for a given point to end up in the middle of
+   * the frame.
+   *
+   * The rig hangs above its target and looks along its heading, so the target
+   * is only in the centre of the screen when the view points straight down.
+   * By a couple of hundred metres the tilt has opened past half the field of
+   * view and the thing you asked to look at is *below the bottom of the
+   * frame*, underneath the camera rather than in front of it. Every flight to
+   * a town, and every screenshot of one, wants the town in the middle — so the
+   * nadir is walked back along the heading by however far the tilt throws the
+   * view forward, which is altitude x tan(tilt), expressed as an angle on the
+   * sphere.
+   */
+  private framedTarget(direction: THREE.Vector3, altitude: number, out: THREE.Vector3): void {
+    out.copy(direction).normalize();
+
+    // The heading frame as it will be *after* the move, so the offset goes the
+    // way the camera will actually be looking.
+    this.quat.setFromUnitVectors(this.target, out);
+    const north = this.tmp.copy(this.north).applyQuaternion(this.quat);
+    north.addScaledVector(out, -north.dot(out));
+    if (north.lengthSq() < 1e-10) return;
+    north.normalize();
+
+    this.frameEast.crossVectors(north, out).normalize();
+    this.frameForward
+      .copy(north)
+      .multiplyScalar(Math.cos(this.targetHeading))
+      .addScaledVector(this.frameEast, Math.sin(this.targetHeading));
+
+    const arc = (altitude * Math.tan(this.tiltAt(altitude))) / PLANET_RADIUS;
+    if (!Number.isFinite(arc) || Math.abs(arc) < 1e-6) return;
+    this.frameEast.crossVectors(out, this.frameForward);
+    if (this.frameEast.lengthSq() < 1e-10) return;
+    this.frameEast.normalize();
+    out.applyAxisAngle(this.frameEast, -arc).normalize();
+  }
+
+  private frameEast = new THREE.Vector3();
+  private frameForward = new THREE.Vector3();
+  private frameOut = new THREE.Vector3();
 
   /**
    * Where a screen position lands on the planet.
@@ -170,6 +217,17 @@ export class CameraRig {
    */
   pickWorld(clientX: number, clientY: number, out = new THREE.Vector3()): THREE.Vector3 | null {
     return this.pickSphere(clientX, clientY, out) ? out : null;
+  }
+
+  /**
+   * Place the view so that a point ends up in the middle of the frame, at once.
+   *
+   * The jump version of flyTo(), for setting a view from a URL or a test.
+   */
+  frameOn(direction: THREE.Vector3, altitude: number): void {
+    this.framedTarget(direction, altitude, this.frameOut);
+    this.quat.setFromUnitVectors(this.target, this.frameOut);
+    this.rotateFrame(this.quat);
   }
 
   /** Rotate the whole view frame, keeping target and north orthonormal. */
@@ -255,7 +313,8 @@ export class CameraRig {
    */
   flyTo(direction: THREE.Vector3, altitude?: number): void {
     this.flightFrom.copy(this.target).normalize();
-    this.flightTo.copy(direction).normalize();
+    // Arrive with the destination framed, not underfoot.
+    this.framedTarget(direction, altitude ?? this.targetAltitude, this.flightTo);
     const angle = Math.acos(THREE.MathUtils.clamp(this.flightFrom.dot(this.flightTo), -1, 1));
     if (angle < 1e-3 && altitude === undefined) return;
 

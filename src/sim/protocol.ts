@@ -91,6 +91,21 @@ export interface SettlementView {
   founded: number;
 }
 
+/**
+ * A great work, and the year and the state that raised it.
+ *
+ * Sent as its own list rather than folded into the settlements, because a
+ * wonder outlives its town: the whole point is that the ziggurat is still
+ * standing over the ruins nine hundred years later.
+ */
+export interface WonderView {
+  cell: number;
+  kind: string;
+  built: number;
+  builderName: string;
+  name: string;
+}
+
 /** A settlement that emptied. The renderer builds ruins where these are. */
 export interface RuinView {
   cell: number;
@@ -144,6 +159,8 @@ export interface SimStateMessage {
    * the largest thing in this message for no reason.
    */
   ruins: RuinView[] | null;
+  /** Great works, or null when none has been raised since the last update. */
+  wonders: WonderView[] | null;
   /** Events since the previous update, already rendered to text. */
   chronicle: { tick: number; text: string; weight: number; cell?: number }[];
   totalPopulation: number;

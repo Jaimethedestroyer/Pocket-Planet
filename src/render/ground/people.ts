@@ -264,12 +264,13 @@ export class PeopleLayer {
     s[i * 3] = p.tint[0];
     s[i * 3 + 1] = p.tint[1];
     s[i * 3 + 2] = p.tint[2];
+    // What they are wearing, with a third of the polity's colour mixed in.
+    // Enough that a crowd reads as *whose* crowd it is; not so much that a
+    // street of people looks like a parade.
     const c = this.cloth.array as Float32Array;
-    // Muted towards the polity's colour rather than saturated with it: a street
-    // of people in pure flag colours reads as a parade.
-    c[i * 3] = cloth[0] * 0.45 + 0.16;
-    c[i * 3 + 1] = cloth[1] * 0.45 + 0.16;
-    c[i * 3 + 2] = cloth[2] * 0.45 + 0.16;
+    for (let k = 0; k < 3; k++) {
+      c[i * 3 + k] = p.cloth[k] * 0.68 + cloth[k] * 0.32;
+    }
   }
 
   commit(): void {

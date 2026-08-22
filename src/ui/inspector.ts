@@ -325,6 +325,7 @@ export class Inspector {
     const sample = this.field.sample(direction.x, direction.y, direction.z, 1);
     const holder = this.polityOf(pick.cell);
 
+    const wonder = this.sim.wonders.find((w) => w.cell === pick.cell);
     const rows: string[] = [];
     let title = '';
     let meta = '';
@@ -375,6 +376,15 @@ export class Inspector {
       rows.push(holder ? `Claimed by ${holder.name}.` : 'Claimed by no one.');
       const near = this.nearestSettlement(pick.cell);
       if (near) rows.push(`Nearest settlement: ${near.name}.`);
+    }
+
+    if (wonder) {
+      const age = Math.max(0, this.sim.tick - wonder.built);
+      rows.push(
+        `${wonder.name} stands here, raised in year ${wonder.built} ` +
+          `by ${wonder.builderName}` +
+          (age > 400 ? `, ${age} years ago.` : '.'),
+      );
     }
 
     this.titleEl.textContent = title;

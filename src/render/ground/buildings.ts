@@ -21,11 +21,13 @@
  */
 
 import * as THREE from 'three';
+import { GLSL_NOISE } from '../shaderLib';
 import { archetypes } from './archetypes';
 import type { ArchetypeName } from './archetypes';
 import { ARCHETYPE_NAMES } from './archetypes';
 import type { SharedUniforms } from '../environment';
 import type { Placement } from './plan';
+import { ShadowLayer } from './shadows';
 
 /** How far from the camera a building may exist, and where it grows in. */
 export const BUILDING_NEAR = 620;
@@ -41,6 +43,7 @@ attribute vec3 iScale;
 attribute vec3 iWall;
 attribute vec3 iRoof;
 attribute vec3 iBanner;
+attribute float iStyle;
 
 uniform float uFadeNear;
 uniform float uFadeFar;
@@ -53,6 +56,8 @@ varying float vAo;
 varying vec3 vWall;
 varying vec3 vRoof;
 varying vec3 vBanner;
+varying vec3 vLocal;
+varying float vStyle;
 
 void main() {
   vec3 up = normalize(iOrigin);
@@ -97,6 +102,10 @@ void main() {
   vWall = iWall;
   vRoof = iRoof;
   vBanner = iBanner;
+  // Model space, in metres and unscaled: courses have to be the same height on
+  // a building the planner squashed as on one it did not.
+  vLocal = position;
+  vStyle = iStyle;
 
   gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);
 }
@@ -119,6 +128,23 @@ varying float vAo;
 varying vec3 vWall;
 varying vec3 vRoof;
 varying vec3 vBanner;
+varying vec3 vLocal;
+varying float vStyle;
+
+${GLSL_NOISE}
+
+/**
+ * A planar coordinate on whichever face this fragment is on.
+ *
+ * Vertical faces get (across, up); horizontal ones get the footprint plane.
+ * Blended by how vertical the normal is, so the change along a roof edge is a
+ * gradient rather than a line — which matters because there is no UV unwrap
+ * anywhere in this game and there is not going to be one.
+ */
+vec2 faceUv(vec3 local, vec3 n) {
+  vec2 wall = vec2(local.x * n.z - local.z * n.x, local.y);
+  return mix(local.xz, wall, clamp((1.0 - abs(n.y)) * 1.6, 0.0, 1.0));
+}
 
 void main() {
   vec3 N = normalize(vNormal);
@@ -143,6 +169,46 @@ void main() {
   } else if (part > 3.5) {
     albedo = vBanner;
     gloss = 0.1;
+  }
+
+  // --- Surface -------------------------------------------------------------
+  // Flat colour is what makes untextured geometry read as a placeholder. None
+  // of this is a texture: it is the same trick the terrain uses, procedural
+  // detail faded in by how close the surface is, so it costs nothing at the
+  // distance where a building is eight pixels tall and everything at the
+  // distance where you are standing next to it.
+  float camDist = length(cameraPosition - vWorldPos);
+  float detail = 1.0 - smoothstep(140.0, 460.0, camDist);
+  if (detail > 0.004 && part < 3.5) {
+    vec2 uv = faceUv(vLocal, N);
+
+    // Mottling: no wall anywhere is one colour. fbm3 averages about 0.44 with
+    // a narrow spread, so it has to be recentred and stretched — used raw it
+    // is a two per cent wobble, which is a cost with no picture attached.
+    float mottle = (fbm3(vWorldPos * 1.25) - 0.44) * 2.4;
+    float coarse = (fbm3(vWorldPos * 0.28) - 0.44) * 2.4;
+    albedo *= 1.0 + (mottle * 0.20 + coarse * 0.16) * detail;
+
+    // Courses. The spacing is the material: thatch and daub have none, mudbrick
+    // has broad ones, fired brick has four to the metre — and roof tiles are
+    // laid in much deeper courses than any wall, which is what still reads from
+    // the far side of a town when the brickwork has gone sub-pixel.
+    float roofy = step(0.5, part) * step(part, 1.5);
+    float spacing = mix(mix(0.62, 0.26, vStyle), mix(1.15, 0.55, vStyle), roofy);
+    float row = floor(uv.y / spacing);
+    // Every other course steps half a brick along, which is the whole
+    // difference between a wall and a grid.
+    float shifted = uv.x + mod(row, 2.0) * spacing * 1.1;
+    float bed = abs(fract(uv.y / spacing) - 0.5) * 2.0;
+    float perp = abs(fract(shifted / (spacing * 2.2)) - 0.5) * 2.0;
+    float mortar = max(smoothstep(0.86, 1.0, bed), smoothstep(0.93, 1.0, perp) * 0.7);
+    // Roughness on the courses themselves, so they are not ruled lines.
+    mortar *= 0.65 + 0.35 * fbm3(vWorldPos * 6.0 + row);
+    albedo *= 1.0 - mortar * 0.42 * detail * max(vStyle, roofy * 0.8);
+
+    // Weathering: streaks running down from the eaves.
+    float streak = fbm3(vec3(uv.x * 5.0, uv.y * 0.7, row)) - 0.5;
+    albedo *= 1.0 + streak * 0.18 * detail;
   }
 
   // Lighting. The direct term is matched to the terrain shader, because two
@@ -206,17 +272,20 @@ interface Pool {
   wall: THREE.InstancedBufferAttribute;
   roof: THREE.InstancedBufferAttribute;
   banner: THREE.InstancedBufferAttribute;
+  style: THREE.InstancedBufferAttribute;
   capacity: number;
   count: number;
 }
 
 export class BuildingLayer {
   readonly group = new THREE.Group();
+  readonly shadows: ShadowLayer;
 
   private material: THREE.ShaderMaterial;
   private pools = new Map<ArchetypeName, Pool>();
 
   constructor(shared: SharedUniforms) {
+    this.shadows = new ShadowLayer(shared);
     this.material = new THREE.ShaderMaterial({
       name: 'buildings',
       vertexShader,
@@ -235,6 +304,7 @@ export class BuildingLayer {
     this.group.name = 'buildings';
     // After the terrain, so the early-z from the ground is already in place.
     this.group.renderOrder = 2;
+    this.group.add(this.shadows.group);
   }
 
   private pool(name: ArchetypeName): Pool {
@@ -261,6 +331,7 @@ export class BuildingLayer {
       wall: null as unknown as THREE.InstancedBufferAttribute,
       roof: null as unknown as THREE.InstancedBufferAttribute,
       banner: null as unknown as THREE.InstancedBufferAttribute,
+      style: null as unknown as THREE.InstancedBufferAttribute,
       capacity: 0,
       count: 0,
     };
@@ -269,6 +340,7 @@ export class BuildingLayer {
     this.group.add(pool.mesh);
     this.pools.set(name, pool);
     this.grow(pool, 256);
+    this.shadows.attach(name, model, pool);
     return pool;
   }
 
@@ -285,12 +357,19 @@ export class BuildingLayer {
     pool.wall = make(3);
     pool.roof = make(3);
     pool.banner = make(3);
+    pool.style = make(1);
     pool.geometry.setAttribute('iOrigin', pool.origin);
     pool.geometry.setAttribute('iRot', pool.rot);
     pool.geometry.setAttribute('iScale', pool.scale);
     pool.geometry.setAttribute('iWall', pool.wall);
     pool.geometry.setAttribute('iRoof', pool.roof);
     pool.geometry.setAttribute('iBanner', pool.banner);
+    pool.geometry.setAttribute('iStyle', pool.style);
+  }
+
+  /** Rebind the shadow pool after a grow replaced the attribute objects. */
+  private rebindShadows(name: ArchetypeName, pool: Pool): void {
+    this.shadows.attach(name, archetypes()[name], pool);
   }
 
   /** Start a fresh upload. Every pool is emptied; nothing is deallocated. */
@@ -309,15 +388,18 @@ export class BuildingLayer {
         wall: pool.wall.array as Float32Array,
         roof: pool.roof.array as Float32Array,
         banner: pool.banner.array as Float32Array,
+        style: pool.style.array as Float32Array,
         count: pool.count,
       };
       this.grow(pool, pool.capacity * 2);
+      this.rebindShadows(p.archetype, pool);
       (pool.origin.array as Float32Array).set(previous.origin.subarray(0, previous.count * 3));
       (pool.rot.array as Float32Array).set(previous.rot.subarray(0, previous.count));
       (pool.scale.array as Float32Array).set(previous.scale.subarray(0, previous.count * 3));
       (pool.wall.array as Float32Array).set(previous.wall.subarray(0, previous.count * 3));
       (pool.roof.array as Float32Array).set(previous.roof.subarray(0, previous.count * 3));
       (pool.banner.array as Float32Array).set(previous.banner.subarray(0, previous.count * 3));
+      (pool.style.array as Float32Array).set(previous.style.subarray(0, previous.count));
     }
 
     const i = pool.count++;
@@ -342,13 +424,15 @@ export class BuildingLayer {
     b[i * 3] = banner[0];
     b[i * 3 + 1] = banner[1];
     b[i * 3 + 2] = banner[2];
+    (pool.style.array as Float32Array)[i] = p.style;
   }
 
   /** Publish whatever was added since begin(). */
   commit(): void {
-    for (const pool of this.pools.values()) {
+    for (const [name, pool] of this.pools) {
       pool.geometry.instanceCount = pool.count;
       pool.mesh.visible = pool.count > 0;
+      this.shadows.setCount(name, pool.count);
       if (pool.count === 0) continue;
       pool.origin.needsUpdate = true;
       pool.rot.needsUpdate = true;
@@ -356,6 +440,7 @@ export class BuildingLayer {
       pool.wall.needsUpdate = true;
       pool.roof.needsUpdate = true;
       pool.banner.needsUpdate = true;
+      pool.style.needsUpdate = true;
     }
   }
 
@@ -367,6 +452,7 @@ export class BuildingLayer {
   setRange(near: number, far: number): void {
     this.material.uniforms.uFadeNear.value = near;
     this.material.uniforms.uFadeFar.value = far;
+    this.shadows.setRange(near, far);
   }
 
   get instanceCount(): number {
@@ -384,6 +470,7 @@ export class BuildingLayer {
   dispose(): void {
     for (const pool of this.pools.values()) pool.geometry.dispose();
     this.pools.clear();
+    this.shadows.dispose();
     this.material.dispose();
   }
 }

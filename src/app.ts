@@ -58,6 +58,12 @@ export interface ViewState {
    * frame, underneath you rather than in front of you.
    */
   tilt?: number;
+  /**
+   * Put the given lat/lon in the middle of the frame rather than under the
+   * camera. See CameraRig.framedTarget — anything aimed at a *place* wants
+   * this; a shot of a landscape does not care.
+   */
+  frame?: boolean;
   autoRotate?: boolean;
 }
 
@@ -227,7 +233,13 @@ export class PocketPlanetApp {
     this.camera.updateMatrixWorld();
     this.terrain.update(this.camera.position, this.projScale());
     this.settlements.setProjScale(this.projScale());
-    this.ground.update(this.camera, this.sim.settlements, this.sim.polities, this.sim.ruins);
+    this.ground.update(
+      this.camera,
+      this.sim.settlements,
+      this.sim.polities,
+      this.sim.ruins,
+      this.sim.wonders,
+    );
 
     this.pipeline.camAltitude = this.rig.altitude;
     this.pipeline.render(this.scene, this.camera);
@@ -271,11 +283,13 @@ export class PocketPlanetApp {
     // the last viewpoint says nothing about this one.
     this.terrain.resetBudget();
 
+    let aimed: THREE.Vector3 | null = null;
     if (view.lat !== undefined || view.lon !== undefined) {
       const lat = THREE.MathUtils.degToRad(view.lat ?? 0);
       const lon = THREE.MathUtils.degToRad(view.lon ?? 0);
       const c = Math.cos(lat);
-      this.rig.target.set(c * Math.cos(lon), Math.sin(lat), c * Math.sin(lon));
+      aimed = new THREE.Vector3(c * Math.cos(lon), Math.sin(lat), c * Math.sin(lon));
+      this.rig.target.copy(aimed);
     }
     this.rig.stopMomentum();
 
@@ -300,6 +314,10 @@ export class PocketPlanetApp {
     if (view.autoRotate !== undefined) {
       this.rig.autoRotate = view.autoRotate;
     }
+
+    // Last, because it needs the altitude, the heading and the tilt to have
+    // been applied already — the offset it computes depends on all three.
+    if (view.frame && aimed) this.rig.frameOn(aimed, this.rig.altitude);
   }
 
   dispose(): void {

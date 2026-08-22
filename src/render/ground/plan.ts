@@ -41,6 +41,13 @@ export interface Placement {
   scale: THREE.Vector3;
   wall: Rgb;
   roof: Rgb;
+  /**
+   * How coursed the walls are, 0 to 1. Thatch and daub have no visible
+   * courses; mudbrick has broad ones; fired brick has four to the metre. It
+   * travels per instance rather than per material because one town can be
+   * halfway through rebuilding itself in a new material.
+   */
+  style: number;
 }
 
 /** A road, as a chain of world-space points with a width. */
@@ -73,6 +80,8 @@ export interface PersonPlacement {
   /** Length of the walk before it turns around, in metres. */
   span: number;
   tint: Rgb;
+  /** What they are wearing, before the polity's colour is mixed into it. */
+  cloth: Rgb;
 }
 
 export interface TownPlan {
@@ -98,6 +107,14 @@ export interface TownRequest {
   capital: boolean;
   coastal: boolean;
   ruined: boolean;
+  /**
+   * The great work standing here, if any.
+   *
+   * Chosen by the simulation in a particular year by a particular state, not
+   * by the planner — so it survives the town emptying and the state falling,
+   * and a resettlement nine centuries later inherits it.
+   */
+  wonder?: ArchetypeName;
   /** Unit position of the cell. */
   unit: THREE.Vector3;
 }
@@ -110,7 +127,10 @@ export interface TownRequest {
  * what conquest should look like — the same streets under a new flag.
  */
 export function signatureOf(req: TownRequest): string {
-  return `${req.tier}/${req.era}/${req.culture}/${req.capital ? 1 : 0}/${req.ruined ? 1 : 0}`;
+  return (
+    `${req.tier}/${req.era}/${req.culture}/${req.capital ? 1 : 0}/` +
+    `${req.ruined ? 1 : 0}/${req.wonder ?? '-'}`
+  );
 }
 
 /** Built radius and building count per tier, from hamlet to metropolis. */
@@ -487,6 +507,7 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
       ),
       wall: samplePalette(style.wallA, style.wallB, shade, jitter),
       roof: samplePalette(style.roofA, style.roofB, rng.next(), jitter * 0.5),
+      style: style.courses * rng.range(0.8, 1.15),
     });
     taken.push({ a, b, r: half * 0.82 });
     return true;
@@ -495,6 +516,12 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
   // --- Ruins: nothing standing, only what the weather has not taken --------
 
   if (req.ruined) {
+    // The great work outlasts the town. Weathered along with everything else
+    // below, but standing, and at full size — that is the whole point of it.
+    if (req.wonder) {
+      const angle = rng.next() * Math.PI * 2;
+      place(req.wonder, 0, 0, Math.cos(angle), Math.sin(angle), 1, true);
+    }
     const count = 4 + tier * 3;
     for (let i = 0; i < count; i++) {
       const angle = rng.next() * Math.PI * 2;
@@ -545,9 +572,12 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
   // --- The centre: civic buildings and the great work ----------------------
 
   let centreClear = 0;
-  if (tier >= 4 || req.capital) {
+  if (req.wonder || tier >= 4 || req.capital) {
+    // A real great work if the simulation raised one here; otherwise a large
+    // town still builds *something* for itself, it just is not history.
     const monument = style.monuments[rng.int(0, style.monuments.length)];
-    const chosen = req.coastal && rng.chance(0.35) ? 'lighthouse' : monument;
+    const chosen =
+      req.wonder ?? (req.coastal && rng.chance(0.35) ? 'lighthouse' : monument);
     const model = models[chosen];
     const angle = rng.next() * Math.PI * 2;
     if (place(chosen, 0, 0, Math.cos(angle), Math.sin(angle), 1, true)) {
@@ -592,10 +622,14 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
   let works = 0;
   let placed = buildings.length;
 
-  // Every candidate is tried, and the loop stops when the town is full. The
-  // list is already shuffled, so a town that runs out of usable ground is
-  // thinned evenly rather than built solid along the first street.
-  for (let k = 0; k < order.length && placed < wanted; k++) {
+  // Candidates are tried until the town is full, or until enough have been
+  // rejected that the ground is clearly against it. The list is shuffled, so a
+  // town that runs out of usable ground is thinned evenly rather than built
+  // solid along the first street — and the attempt cap bounds the worst case,
+  // which is a metropolis planned on a mountainside where almost every
+  // candidate costs three terrain samples and fails.
+  const attempts = Math.min(order.length, Math.max(40, wanted * 5));
+  for (let k = 0; k < attempts && placed < wanted; k++) {
     const { street, index, side } = order[k];
     const p = street.points[index];
     const prev = street.points[index - 1];
@@ -693,6 +727,16 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
       [0.31, 0.21, 0.15],
       [0.74, 0.60, 0.48],
     ];
+    // Undyed wool, madder, woad, ochre, and the black everyone owns one of.
+    // A crowd all in the flag's colour reads as a parade rather than a town.
+    const cloth: Rgb[] = [
+      [0.42, 0.38, 0.31],
+      [0.34, 0.15, 0.12],
+      [0.16, 0.20, 0.34],
+      [0.46, 0.35, 0.14],
+      [0.13, 0.12, 0.13],
+      [0.28, 0.30, 0.22],
+    ];
     for (let i = 0; i < count; i++) {
       const road = roads[rng.int(0, roads.length)];
       if (road.points.length < 3) continue;
@@ -712,6 +756,7 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
         phase: rng.next(),
         span: rng.range(12, 34),
         tint: skin[rng.int(0, skin.length)],
+        cloth: cloth[rng.int(0, cloth.length)],
       });
     }
   }

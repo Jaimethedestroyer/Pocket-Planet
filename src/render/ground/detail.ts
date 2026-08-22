@@ -30,13 +30,14 @@ import { PLANET_RADIUS } from '../../planet/config';
 import { Era } from '../../sim/types';
 import type { PlanetField } from '../../planet/heightfield';
 import type { SharedUniforms } from '../environment';
-import type { PolityView, SettlementView } from '../../sim/protocol';
+import type { PolityView, SettlementView, WonderView } from '../../sim/protocol';
 import { polityColor } from '../../sim/protocol';
 import { BUILDING_FAR, BUILDING_NEAR, BuildingLayer } from './buildings';
 import { ROAD_FAR, ROAD_NEAR, RoadLayer } from './roads';
 import { PROP_FAR, PROP_NEAR, PropLayer } from './props';
 import { PEOPLE_FAR, PEOPLE_NEAR, PeopleLayer } from './people';
 import { planTown, signatureOf } from './plan';
+import type { ArchetypeName } from './archetypes';
 import { kitShowcase } from './showcase';
 import type { TownPlan, TownRequest } from './plan';
 import { townStyle } from './style';
@@ -139,11 +140,6 @@ export class GroundDetail {
   }
 
   /**
-   * Choose the visible towns, plan what needs planning, and upload.
-   *
-   * Called every frame; almost every frame it does nothing but a distance sort.
-   */
-  /**
    * Show the whole model catalogue instead of the world's towns.
    *
    * A development view, reachable with `?kit=1`. It replaces the town selection
@@ -176,11 +172,17 @@ export class GroundDetail {
     return out.multiplyScalar(Math.max(t, 0)).add(this.cameraPos).normalize();
   }
 
+  /**
+   * Choose the visible towns, plan what needs planning, and upload.
+   *
+   * Called every frame; almost every frame it does nothing but a distance sort.
+   */
   update(
     camera: THREE.PerspectiveCamera,
     settlements: SettlementView[],
     polities: PolityView[],
     ruins: RuinView[],
+    wonders: WonderView[] = [],
   ): void {
     if (this.showcase !== null) {
       this.viewCentre(camera, this.unit);
@@ -219,6 +221,8 @@ export class GroundDetail {
 
     const byPolity = new Map<number, PolityView>();
     for (const p of polities) byPolity.set(p.id, p);
+    const wonderAt = new Map<number, ArchetypeName>();
+    for (const w of wonders) wonderAt.set(w.cell, w.kind as ArchetypeName);
 
     const candidates: {
       cell: number;
@@ -258,6 +262,7 @@ export class GroundDetail {
           capital,
           coastal: false,
           ruined,
+          wonder: wonderAt.get(cell),
           unit: this.unit.clone(),
         },
       });

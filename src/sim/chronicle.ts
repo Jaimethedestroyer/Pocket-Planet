@@ -77,6 +77,11 @@ const TEMPLATES: Templates = {
   'religion-born': ['{religion} is first preached in {polity}.'],
   'culture-born': ['A new people emerge from the ruins of {polity}: the {culture}.'],
   'golden-age': ['{polity} enters a golden age.'],
+  wonder: [
+    '{place} is completed, after a generation of work, under {polity}.',
+    '{polity} completes {place}. It is meant to outlast them, and it will.',
+    'The last stone of {place} is set. {polity} has spent a treasury on it.',
+  ],
 };
 
 function templateKey(event: SimEvent): string {
