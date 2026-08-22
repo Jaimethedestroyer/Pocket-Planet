@@ -560,13 +560,23 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
 
   for (const street of streets) {
     if (street.points.length < 2) continue;
-    const points: THREE.Vector3[] = [];
+    // Streets are planned on a flat disc and the disc does not know where the
+    // sea is. A coastal town's grid runs straight off the beach otherwise —
+    // and takes the people walking on it with it, which is how this was found.
+    // Cut the polyline at the waterline instead of clamping it: a road that
+    // stops at the shore is right, and one that hugs the waterline is not.
+    let run: THREE.Vector3[] = [];
+    const flush = (): void => {
+      if (run.length >= 2) roads.push({ points: run, width: street.width, grade: street.grade });
+      run = [];
+    };
     for (const p of densify(street.points, 6)) {
       const v = new THREE.Vector3();
-      site.world(p.a, p.b, 0, v);
-      points.push(v);
+      const h = site.world(p.a, p.b, 0, v);
+      if (h < 0.5) flush();
+      else run.push(v);
     }
-    roads.push({ points, width: street.width, grade: street.grade });
+    flush();
   }
 
   // --- The centre: civic buildings and the great work ----------------------

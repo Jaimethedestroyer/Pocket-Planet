@@ -167,7 +167,11 @@ void main() {
     glass = 1.0;
     gloss = 0.6;
   } else if (part > 3.5) {
-    albedo = vBanner;
+    // Dyed cloth, not a flag on a screen. The polity's colour is chosen to
+    // stay legible as a territory field seen from orbit, which makes it far
+    // too saturated for a market awning standing next to earth-coloured
+    // walls — a cyan state ends up with cyan parasols.
+    albedo = vBanner * 0.72 + vWall * 0.14;
     gloss = 0.1;
   }
 

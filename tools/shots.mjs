@@ -58,14 +58,14 @@ const SHOTS = [
   { name: 'kit', lat: 3.5, lon: 94.5, altitude: 200, heading: 0, tilt: -0.62, sunOffset: -40, frame: true },
   { name: 'kit-low', lat: 3.5, lon: 94.5, altitude: 95, heading: 0, tilt: -0.62, sunOffset: -50, frame: true },
   { name: 'town', town: 0, altitude: 220, heading: 40, tilt: -0.42, sunOffset: -52, years: 700, frame: true },
-  { name: 'town-street', town: 0, altitude: 26, heading: 40, tilt: -0.52, sunOffset: -64, years: 0, frame: true },
+  { name: 'town-street', town: 0, altitude: 40, heading: 40, tilt: -0.5, sunOffset: -64, years: 0, frame: true },
   { name: 'town-night', town: 0, altitude: 170, heading: 40, tilt: -0.4, sunOffset: -140, years: 0, frame: true },
   { name: 'town-second', town: 3, altitude: 140, heading: 200, tilt: -0.38, sunOffset: -44, years: 0, frame: true },
   // A grown city, at three altitudes. Eighteen hundred more years gets the
   // largest settlement to a tier where it has streets rather than a clearing.
   { name: 'city', town: 0, altitude: 330, heading: 90, tilt: -0.52, sunOffset: -44, years: 2200, frame: true },
   { name: 'city-close', town: 0, altitude: 120, heading: 25, tilt: -0.5, sunOffset: -56, frame: true },
-  { name: 'city-street', town: 0, altitude: 24, heading: 25, tilt: -0.55, sunOffset: -66, frame: true },
+  { name: 'city-street', town: 0, altitude: 38, heading: 25, tilt: -0.52, sunOffset: -66, frame: true },
   { name: 'city-night', town: 0, altitude: 260, heading: 90, tilt: -0.5, sunOffset: -142, frame: true },
   // Tap to inspect: aim at a town, then tap it and capture the panel.
   { name: 'inspect', town: 0, altitude: 900, heading: 0, tilt: -0.5, sunOffset: -34, tapTown: true, frame: true },
@@ -76,7 +76,13 @@ const SHOTS = [
 
 const wanted = process.argv.slice(2);
 const suffix = process.env.TAG ? `-${process.env.TAG}` : '';
-const shots = wanted.length ? SHOTS.filter((s) => wanted.includes(s.name)) : SHOTS;
+// The kit sheet is a development view and only renders as one when KIT is set;
+// without it those two viewpoints photograph whatever landscape happens to be
+// at those coordinates, which is a misleading thing to leave in docs/shots.
+const selectable = process.env.KIT ? SHOTS : SHOTS.filter((s) => !s.name.startsWith('kit'));
+const shots = wanted.length
+  ? selectable.filter((s) => wanted.includes(s.name))
+  : selectable;
 
 async function run(cmd, args) {
   return new Promise((resolve, reject) => {
