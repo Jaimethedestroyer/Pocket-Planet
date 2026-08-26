@@ -56,7 +56,7 @@ import type { Rng } from '../../core/rng';
 import type { PlanetField } from '../../planet/heightfield';
 import { archetypes } from './archetypes';
 import type { ArchetypeName } from './archetypes';
-import { samplePalette, townStyle } from './style';
+import { foliageTint, samplePalette, townStyle } from './style';
 import type { Rgb } from './style';
 import { Occupancy, footprint } from './plot';
 import type { Local } from './plot';
@@ -129,6 +129,42 @@ export interface PropPlacement {
   tint: Rgb;
 }
 
+/**
+ * A fire, a torch or a plume of chimney smoke.
+ *
+ * Planned with the town rather than spawned at draw time, for the same reason
+ * everything else here is: a hearth that moved when the settlement grew would
+ * be a hearth somebody put out and relit next door.
+ */
+export interface FirePlacement {
+  /** World position of the foot of the flame. */
+  origin: THREE.Vector3;
+  /** Metres tall. */
+  size: number;
+  /** 0 campfire, 1 torch, 2 brazier, 3 chimney smoke. */
+  kind: number;
+  /** Offsets the flicker, so a row of torches is not one torch six times. */
+  phase: number;
+}
+
+/**
+ * A pennant on a mast, over something civic.
+ *
+ * The colour is not here. A town that changes hands keeps its streets and its
+ * buildings — see `signatureOf` — and it must keep its banners too, or conquest
+ * would replan the whole settlement to repaint a flag. The polity's colour is
+ * applied at upload instead, which is why conquest is free.
+ */
+export interface BannerPlacement {
+  /** World position of the foot of the mast. */
+  origin: THREE.Vector3;
+  /** Mast height above that point, in metres. */
+  mast: number;
+  /** Height of the cloth, in metres. */
+  size: number;
+  phase: number;
+}
+
 /** A billboard person walking a street. */
 export interface PersonPlacement {
   origin: THREE.Vector3;
@@ -140,7 +176,15 @@ export interface PersonPlacement {
   phase: number;
   /** Length of the walk before it turns around, in metres. */
   span: number;
-  tint: Rgb;
+  /**
+   * Per-person modulation of the sheet, about one.
+   *
+   * The era sheets are one pre-rendered figure walking one cycle, so without
+   * this a street is that figure repeated. Varying what each of them catches of
+   * the light breaks the row up at the distance people are actually seen from,
+   * which is thirty metres and thirty pixels tall.
+   */
+  tone: Rgb;
   /** What they are wearing, before the polity's colour is mixed into it. */
   cloth: Rgb;
 }
@@ -159,6 +203,8 @@ export interface TownPlan {
   plazas: Plaza[];
   props: PropPlacement[];
   people: PersonPlacement[];
+  fires: FirePlacement[];
+  banners: BannerPlacement[];
 }
 
 export interface TownRequest {
@@ -340,6 +386,8 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
   const plazas: Plaza[] = [];
   const props: PropPlacement[] = [];
   const people: PersonPlacement[] = [];
+  const fires: FirePlacement[] = [];
+  const banners: BannerPlacement[] = [];
   const taken = new Occupancy(26);
 
   const scratch = new THREE.Vector3();
@@ -432,6 +480,103 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
     return true;
   };
 
+  /**
+   * A banner over a building, flying from a mast on its ridge.
+   *
+   * Scaled off the building rather than fixed, so a flag on a great hall is a
+   * flag and a flag on a cathedral is a flag on a cathedral. The mast stands
+   * proud of the roof by about a fifth of the building's own height, which is
+   * enough to clear a spire's finial without looking like a radio antenna.
+   */
+  const raiseBanner = (name: ArchetypeName, prng: Rng): void => {
+    if (req.ruined) return;
+    const built = buildings[buildings.length - 1];
+    const height = models[name].height * built.scale.y;
+    const up = built.origin.clone().normalize();
+    banners.push({
+      origin: built.origin.clone().addScaledVector(up, height * 0.94),
+      mast: Math.max(2.2, height * 0.22) + prng.range(0, 0.8),
+      size: Math.max(1.5, Math.min(4.5, height * 0.16)),
+      phase: prng.next(),
+    });
+  };
+
+  /**
+   * Light and smoke, hung off a building that actually got built.
+   *
+   * Called with the same stream `place` was handed, immediately after it
+   * succeeded, which is what keeps a hearth attached to *its* house: the stream
+   * is seeded from the plot rather than drawn in sequence, so a village that
+   * grows into a city relights the same fires in the same yards instead of
+   * redealing them across the whole town.
+   *
+   * A ruin gets nothing. Nobody is home. Nor does a great work: a ziggurat is
+   * not heated, and a cathedral with a smoking chimney is a factory.
+   */
+  const lightUp = (
+    name: ArchetypeName,
+    a: number,
+    b: number,
+    prng: Rng,
+    chimney = true,
+  ): void => {
+    if (req.ruined) return;
+    const model = models[name];
+    const built = buildings[buildings.length - 1];
+    const hearths = style.hearths;
+    const up = built.origin.clone().normalize();
+
+    // On the roof. The one that reads by day, and the only reason an industrial
+    // city looks like it is working rather than merely standing there.
+    const top = model.height * built.scale.y;
+    if (chimney && prng.chance(hearths.chimney)) {
+      fires.push({
+        origin: built.origin
+          .clone()
+          .addScaledVector(up, top * 0.92)
+          .addScaledVector(site.east, prng.range(-0.25, 0.25) * model.width)
+          .addScaledVector(site.north, prng.range(-0.25, 0.25) * model.depth),
+        // Capped, because the plume is smoke from a hearth rather than from the
+        // building: a hall four times the height of a house does not burn four
+        // times as much wood.
+        size: prng.range(0.9, 1.5) * (3.0 + Math.min(top, 14) * 0.3),
+        kind: 3,
+        phase: prng.next(),
+      });
+    }
+
+    // On the ground beside it, or up the wall. Drawn from one roll rather than
+    // three, so a house that keeps a fire in the yard is not also carrying a
+    // torch and a brazier.
+    const roll = prng.next();
+    let kind = -1;
+    if (roll < hearths.campfire) kind = 0;
+    else if (roll < hearths.campfire + hearths.torch) kind = 1;
+    else if (roll < hearths.campfire + hearths.torch + hearths.brazier) kind = 2;
+    if (kind < 0) return;
+
+    const angle = prng.next() * Math.PI * 2;
+    const reach = Math.max(model.width, model.depth) * 0.5 + prng.range(1.1, 2.4);
+    const spot = new THREE.Vector3();
+    // Never on water, and never on the ground the neighbours are standing on.
+    if (site.world(a + Math.cos(angle) * reach, b + Math.sin(angle) * reach, 0, spot) < 1.5) {
+      return;
+    }
+    // A torch is in a bracket on the wall; the other two sit on the ground.
+    if (kind === 1) spot.addScaledVector(up, prng.range(1.9, 2.6));
+    fires.push({
+      origin: spot,
+      size:
+        kind === 0
+          ? prng.range(1.3, 1.9)
+          : kind === 1
+            ? prng.range(0.8, 1.1)
+            : prng.range(1.1, 1.6),
+      kind,
+      phase: prng.next(),
+    });
+  };
+
   const finish = (): TownPlan => ({
     cell: req.cell,
     tier: req.tier,
@@ -444,6 +589,8 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
     plazas,
     props,
     people,
+    fires,
+    banners,
   });
 
   // --- Ruins: nothing standing, only what the weather has not taken --------
@@ -696,32 +843,44 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
   if (req.wonder || tier >= 4 || req.capital) {
     // A real great work if the simulation raised one here; otherwise a large
     // town still builds *something* for itself, it just is not history.
-    place(
+    const monumentRng = makeRng(mixSeed(geomSeed, 4410));
+    if (place(
       monumentName,
       0,
       0,
       Math.cos(monumentAngle),
       Math.sin(monumentAngle),
       1,
-      makeRng(mixSeed(geomSeed, 4410)),
+      monumentRng,
       'forced',
-    );
+    )) {
+      lightUp(monumentName, 0, 0, monumentRng, false);
+      // The great work flies one whether or not the town is a capital: it is
+      // the tallest thing for a mile and the only place a flag would be seen.
+      raiseBanner(monumentName, monumentRng);
+    }
     const m = models[monumentName];
     centreClear = Math.max(m.width, m.depth) * 0.75;
   }
 
   if (tier >= 2) {
     // The civic building stands on the edge of the square, facing in.
-    place(
+    const civicRng = makeRng(mixSeed(geomSeed, 4411));
+    const civicA = Math.cos(civicAngle) * civicRadius;
+    const civicB = Math.sin(civicAngle) * civicRadius;
+    if (place(
       civicName,
-      Math.cos(civicAngle) * civicRadius,
-      Math.sin(civicAngle) * civicRadius,
+      civicA,
+      civicB,
       -Math.cos(civicAngle),
       -Math.sin(civicAngle),
       1,
-      makeRng(mixSeed(geomSeed, 4411)),
+      civicRng,
       'forced',
-    );
+    )) {
+      lightUp(civicName, civicA, civicB, civicRng);
+      raiseBanner(civicName, civicRng);
+    }
   }
 
   // The square itself: the court, widened to hold whatever ended up standing in
@@ -746,6 +905,25 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
     }
     // A primitive common is beaten earth; anything later has paved it.
     if (dry) plazas.push({ centre: centreWorld, rim, grade: req.era === Era.Primitive ? 0 : 2 });
+
+    // And what burns in the middle of it. The square is the one place in a
+    // settlement that is *civic* rather than somebody's yard, so this is the
+    // fire that says which century the town is in: a common bonfire, then a
+    // brazier, and then nothing at all once the streets have lamps of their
+    // own. Off centre by half the square, because the great work is at nought.
+    if (dry && style.squareFire >= 0) {
+      const angle = centreRng.next() * Math.PI * 2;
+      const r = Math.max(plazaRadius * 0.55, centreClear + 2.5);
+      const spot = new THREE.Vector3();
+      if (site.world(Math.cos(angle) * r, Math.sin(angle) * r, 0, spot) >= 1.5) {
+        fires.push({
+          origin: spot,
+          size: style.squareFire === 0 ? 3.0 : 2.1,
+          kind: style.squareFire,
+          phase: centreRng.next(),
+        });
+      }
+    }
   }
 
   // --- Frontage: which of the town's plots are standing yet -----------------
@@ -819,7 +997,9 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
     const edge = plot.dist / here;
     if (edge > 0.72 && plot.fringe < (edge - 0.72) * 2.6) continue;
     plotRng.reseed(plot.seed ^ 0x5bf03635);
-    place(plot.name, plot.a, plot.b, plot.fa, plot.fb, plot.scale, plotRng, 'planned');
+    if (place(plot.name, plot.a, plot.b, plot.fa, plot.fb, plot.scale, plotRng, 'planned')) {
+      lightUp(plot.name, plot.a, plot.b, plotRng);
+    }
   }
 
   // --- Fields and orchards -------------------------------------------------
@@ -849,7 +1029,6 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
       else if (ground.moisture < 0.34) kind = 3;
       else if (ground.temperature > 0.72 && ground.moisture < 0.5) kind = 3;
 
-      const lush = 0.55 + ground.moisture * 0.7;
       props.push({
         origin: dir.clone().multiplyScalar(PLANET_RADIUS + ground.height - 0.25),
         rot: fieldRng.next() * Math.PI,
@@ -859,14 +1038,7 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
             ? fieldRng.range(1.6, 2.8)
             : fieldRng.range(3.4, 6.4),
         kind,
-        tint:
-          kind === 1
-            ? [fieldRng.range(0.34, 0.50), fieldRng.range(0.34, 0.46), fieldRng.range(0.09, 0.17)]
-            : [
-                fieldRng.range(0.09, 0.20) * lush,
-                fieldRng.range(0.19, 0.34) * lush,
-                fieldRng.range(0.06, 0.15) * lush,
-              ],
+        tint: foliageTint(fieldRng, kind, ground.moisture),
       });
     }
   }
@@ -878,12 +1050,6 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
   if (roads.length > 0) {
     const walkRng = makeRng(mixSeed(geomSeed, 1327));
     const count = Math.min(64, 6 + tier * 11);
-    const skin: Rgb[] = [
-      [0.44, 0.31, 0.22],
-      [0.62, 0.46, 0.34],
-      [0.31, 0.21, 0.15],
-      [0.74, 0.60, 0.48],
-    ];
     // Undyed wool, madder, woad, ochre, and the black everyone owns one of.
     // A crowd all in the flag's colour reads as a parade rather than a town.
     const cloth: Rgb[] = [
@@ -912,7 +1078,11 @@ export function planTown(req: TownRequest, field: PlanetField, worldSeed: number
         speed: walkRng.range(0.8, 1.5),
         phase: walkRng.next(),
         span: walkRng.range(12, 34),
-        tint: skin[walkRng.int(0, skin.length)],
+        tone: [
+          walkRng.range(0.84, 1.14),
+          walkRng.range(0.84, 1.12),
+          walkRng.range(0.82, 1.10),
+        ],
         cloth: cloth[walkRng.int(0, cloth.length)],
       });
     }

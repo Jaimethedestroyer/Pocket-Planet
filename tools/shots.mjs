@@ -67,6 +67,8 @@ const SHOTS = [
   // A grown city, at three altitudes. Eighteen hundred more years gets the
   // largest settlement to a tier where it has streets rather than a clearing.
   { name: 'city', town: 0, altitude: 330, heading: 90, tilt: -0.52, sunOffset: -44, years: 2200, frame: true },
+  { name: 'war', town: 0, altitude: 150, heading: 25, tilt: -0.30, sunOffset: -56, siege: true, clouds: 0, frame: true },
+  { name: 'war-region', town: 0, altitude: 700, heading: 40, tilt: -0.5, sunOffset: -46, siege: true, clouds: 0, frame: true },
   { name: 'city-close', town: 0, altitude: 120, heading: 25, tilt: -0.5, sunOffset: -56, frame: true },
   { name: 'city-street', town: 0, altitude: 38, heading: 25, tilt: -0.52, sunOffset: -66, frame: true },
   { name: 'city-night', town: 0, altitude: 260, heading: 90, tilt: -0.5, sunOffset: -142, frame: true },
@@ -180,13 +182,18 @@ await page.evaluate('window.pocketPlanet.setSpeed(0)');
 
 let simulatedYears = 0;
 for (const shot of shots) {
-  const { name, years, sunOffset, panel, town, tapTown, clouds, ...view } = shot;
+  const { name, years, sunOffset, panel, town, tapTown, clouds, siege, ...view } = shot;
+  void siege;
   void tapTown;
   void sunOffset;
   // Weather per viewpoint. The road network between towns is the one thing
   // here that cloud shadow makes genuinely unreadable, and clearing the sky
   // for the whole run would change every other reference image.
   await page.evaluate((c) => window.pocketPlanet.setClouds(c), clouds ?? null);
+  // `siege` besieges every town in frame. A real war happens where the
+  // simulation decides, which is almost never where a fixed viewpoint is
+  // pointing; see GroundDetail.setSiege.
+  await page.evaluate((on) => window.pocketPlanet.setSiege(on), !!shot.siege);
   if (years) {
     // Advance in bounded chunks: the worker caps a single catch-up so that a
     // long absence cannot block it for seconds on end.

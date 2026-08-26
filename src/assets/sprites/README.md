@@ -5,11 +5,29 @@ mechanically packaged by `tools/package-generated-sprites.ps1` to preserve the
 atlas dimensions and cell layouts in `docs/ASSET-STYLE.md`.
 
 This is the guide's second-choice delivery form and deliberately breaks the
-project's current "nothing ships as an asset" invariant. At the user's
-direction, it also overrides the mask-only and no-baked-light rules: a realistic
-pre-rendered 3D billboard needs full color and dimensional form lighting. The
-renderer still uses the procedural atlases in `src/render/ground/textures.ts`;
-these files are ready source assets for the later integration pass.
+project's "nothing ships as an asset" invariant. At the user's direction, it
+also overrides the mask-only and no-baked-light rules: a realistic pre-rendered
+3D billboard needs full color and dimensional form lighting.
+
+**All ten sheets are now in the game.** `src/render/ground/sheets.ts` is the one
+place they are loaded; the procedural atlases they replaced are gone, and
+`docs/ASSET-STYLE.md` carries the contract the shaders actually implement. What
+each sheet is drawn by:
+
+| Sheet | Drawn by |
+|---|---|
+| `people-*.png` | `render/ground/people.ts` — one era per atlas row |
+| `vegetation.png` | `render/ground/props.ts` — crossed quads |
+| `fire-light.png` | `render/ground/fires.ts` — additive flames, lit chimney smoke |
+| `war-smoke.png` | `render/ground/war.ts` — a burning settlement |
+| `war-banner.png` | `render/ground/banners.ts` — tinted per polity |
+| `war-projectile.png`, `war-impact.png` | `render/ground/war.ts` — the siege |
+
+Two things the integration pass had to do to these files at load, rather than
+change the files themselves: their transparent pixels are black, which mipmaps
+into a dark fringe around every leaf, so `sheets.ts` bleeds the edge colour
+outwards first; and they are decoded as sRGB rather than uploaded raw, because
+they carry colour and the scene is linear until the tone map.
 
 | File | Layout | Encoding |
 |---|---:|---|

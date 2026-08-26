@@ -1,10 +1,10 @@
 /**
  * Ground detail: which towns get built, and when.
  *
- * The layers below this one know how to draw a building, a road, a tree and a
- * person. This decides which of them exist. On a planet with three hundred
- * settlements and a camera that can be anywhere from six metres to four
- * thousand kilometres up, that decision is the whole system.
+ * The layers below this one know how to draw a building, a road, a tree, a
+ * person, a fire and a banner. This decides which of them exist. On a planet
+ * with three hundred settlements and a camera that can be anywhere from six
+ * metres to four thousand kilometres up, that decision is the whole system.
  *
  * Three budgets, in order of how expensive it is to get them wrong:
  *
@@ -36,6 +36,11 @@ import { BUILDING_FAR, BUILDING_NEAR, BuildingLayer } from './buildings';
 import { ROAD_FAR, ROAD_NEAR, RoadLayer } from './roads';
 import { PROP_FAR, PROP_NEAR, PropLayer } from './props';
 import { PEOPLE_FAR, PEOPLE_NEAR, PeopleLayer } from './people';
+import { FIRE_FAR, FIRE_NEAR, FireLayer } from './fires';
+import { BANNER_FAR, BANNER_NEAR, BannerLayer } from './banners';
+import { SIEGE_FAR, SIEGE_NEAR, SMOKE_FAR, SMOKE_NEAR, SiegeLayer, SmokeLayer } from './war';
+import type { ShotPlacement } from './war';
+import { makeRng, mixSeed } from '../../core/rng';
 import { TIER_RADIUS, planTown, signatureOf } from './plan';
 import type { ArchetypeName } from './archetypes';
 import { kitShowcase } from './showcase';
@@ -86,7 +91,20 @@ interface Active {
   banner: Rgb;
   lamps: number;
   roadColor: Rgb;
+  /**
+   * The enemy this town is on the front line against, as a unit position, or
+   * null if nobody is fighting over it. It is a direction rather than a flag
+   * because the arrows have to come from somewhere, and coming from the enemy's
+   * side of the town is most of what makes a siege read as a siege.
+   */
+  attacker: THREE.Vector3 | null;
 }
+
+/** Columns of smoke over a settlement on the front line. */
+const BURNING_MAX = 5;
+
+/** Arrows in the air over a besieged town at any one time. */
+const SIEGE_SHOTS = 14;
 
 export class GroundDetail {
   readonly group = new THREE.Group();
@@ -95,6 +113,10 @@ export class GroundDetail {
   private roads: RoadLayer;
   private props: PropLayer;
   private people: PeopleLayer;
+  private fires: FireLayer;
+  private banners: BannerLayer;
+  private smoke: SmokeLayer;
+  private siege: SiegeLayer;
 
   private field: PlanetField;
   private worldSeed: number;
@@ -112,10 +134,29 @@ export class GroundDetail {
   private lastPlanMs = 0;
   private townCount = 0;
 
+  /**
+   * Which settlements a war is being fought over, and from where.
+   *
+   * A war in this simulation is a state of two polities, not a set of armies
+   * with positions, so the front has to be inferred: the pair of settlements —
+   * one on each side — that are closest to each other. That is where the
+   * fighting is, it is the town that changes hands, and it is a far better
+   * choice than burning every settlement of a belligerent, which would set a
+   * continent alight because two kingdoms fell out over a border.
+   *
+   * Memoised on the identity of the arrays it was computed from. Those are
+   * replaced wholesale by each state message from the worker, so this is exact:
+   * it recomputes when the simulation says something changed and at no other
+   * time, which matters because the scan is quadratic in settlements per war.
+   */
+  private frontOf = new Map<number, THREE.Vector3>();
+  private frontKey: unknown = null;
+
   private cameraPos = new THREE.Vector3();
   private unit = new THREE.Vector3();
   private wildCentre = new THREE.Vector3();
   private wildExclude: { centre: THREE.Vector3; radius: number }[] = [];
+  private shots: ShotPlacement[] = [];
 
   constructor(shared: SharedUniforms, field: PlanetField, worldSeed: number) {
     this.field = field;
@@ -127,9 +168,23 @@ export class GroundDetail {
     this.roads = new RoadLayer(shared);
     this.props = new PropLayer(shared);
     this.people = new PeopleLayer(shared);
+    this.fires = new FireLayer(shared);
+    this.banners = new BannerLayer(shared);
+    this.smoke = new SmokeLayer(shared);
+    this.siege = new SiegeLayer(shared);
 
     this.group.name = 'ground-detail';
-    this.group.add(this.buildings.group, this.roads.mesh, this.props.mesh, this.people.mesh);
+    this.group.add(
+      this.buildings.group,
+      this.roads.mesh,
+      this.props.mesh,
+      this.people.mesh,
+      this.fires.mesh,
+      this.banners.mesh,
+      this.smoke.mesh,
+      this.siege.arrows,
+      this.siege.impacts,
+    );
   }
 
   setCellData(positions: Float32Array): void {
@@ -145,6 +200,10 @@ export class GroundDetail {
     this.roads.setRange(ROAD_NEAR * scale, ROAD_FAR * scale);
     this.props.setRange(PROP_NEAR * scale, PROP_FAR * scale);
     this.people.setRange(PEOPLE_NEAR * scale, PEOPLE_FAR * scale);
+    this.fires.setRange(FIRE_NEAR * scale, FIRE_FAR * scale);
+    this.banners.setRange(BANNER_NEAR * scale, BANNER_FAR * scale);
+    this.smoke.setRange(SMOKE_NEAR * scale, SMOKE_FAR * scale);
+    this.siege.setRange(SIEGE_NEAR * scale, SIEGE_FAR * scale);
     this.rangeScale = scale;
     this.wild.invalidate();
   }
@@ -187,6 +246,145 @@ export class GroundDetail {
   }
 
   private showcase: number | 'all' | null = null;
+
+  /**
+   * Besiege every town in view, whether or not anybody is at war.
+   *
+   * A development view, reachable with `?siege=1`, and the counterpart of
+   * `?kit=`. A war is a thing the simulation decides on its own schedule
+   * somewhere on a planet with three hundred settlements, which makes the one
+   * part of the ground detail that only exists during a war nearly impossible
+   * to look at on purpose — and looking at it is how everything else here got
+   * tuned.
+   */
+  setSiege(on: boolean): void {
+    if (this.siegeAll === on) return;
+    this.siegeAll = on;
+    this.uploaded = '';
+  }
+
+  private siegeAll = false;
+
+  /** An imaginary enemy just east of the town, for `setSiege`. */
+  private mockAttacker(cell: number, positions: Float32Array): THREE.Vector3 | null {
+    if (!this.siegeAll) return null;
+    const c = cell * 3;
+    return new THREE.Vector3(positions[c], positions[c + 1], positions[c + 2])
+      .add(new THREE.Vector3(0.02, 0, 0.02))
+      .normalize();
+  }
+
+  private front(
+    settlements: SettlementView[],
+    polities: PolityView[],
+    positions: Float32Array,
+  ): Map<number, THREE.Vector3> {
+    if (this.frontKey === settlements) return this.frontOf;
+    this.frontKey = settlements;
+    this.frontOf.clear();
+
+    const enemyOf = new Map<number, number>();
+    for (const p of polities) if (p.alive && p.atWarWith >= 0) enemyOf.set(p.id, p.atWarWith);
+    if (enemyOf.size === 0) return this.frontOf;
+
+    // Both ends of every war, not only the states that named one: a polity can
+    // be at war without its own `atWarWith` pointing back, and a front with
+    // only one side to it is not a front.
+    const belligerents = new Set<number>(enemyOf.keys());
+    for (const enemy of enemyOf.values()) belligerents.add(enemy);
+
+    const towns = new Map<number, SettlementView[]>();
+    for (const s of settlements) {
+      if (!belligerents.has(s.polity)) continue;
+      const list = towns.get(s.polity);
+      if (list) list.push(s);
+      else towns.set(s.polity, [s]);
+    }
+
+    const at = (cell: number, out: THREE.Vector3): THREE.Vector3 =>
+      out.set(positions[cell * 3], positions[cell * 3 + 1], positions[cell * 3 + 2]);
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+
+    const done = new Set<number>();
+    for (const [side, enemy] of enemyOf) {
+      // Each war once, from whichever end names it first.
+      const pair = side < enemy ? side * 65536 + enemy : enemy * 65536 + side;
+      if (done.has(pair)) continue;
+      done.add(pair);
+
+      const ours = towns.get(side);
+      const theirs = towns.get(enemy);
+      if (!ours || !theirs) continue;
+
+      let best = Infinity;
+      let ourCell = -1;
+      let theirCell = -1;
+      for (const x of ours) {
+        at(x.cell, a);
+        for (const y of theirs) {
+          const d = a.distanceToSquared(at(y.cell, b));
+          if (d >= best) continue;
+          best = d;
+          ourCell = x.cell;
+          theirCell = y.cell;
+        }
+      }
+      if (ourCell < 0) continue;
+      // Each end of the front is besieged by the other, which is what points
+      // the arrows over the right wall.
+      this.frontOf.set(ourCell, at(theirCell, new THREE.Vector3()));
+      this.frontOf.set(theirCell, at(ourCell, new THREE.Vector3()));
+    }
+    return this.frontOf;
+  }
+
+  /**
+   * Where a besieging line stands, and what it is shooting at.
+   *
+   * Loosed from outside the built radius on the enemy's side of the town and
+   * dropped inside it. Seeded from the cell, so the same siege is the same
+   * siege every time it is uploaded rather than a new volley per frame.
+   */
+  private siegeShots(plan: TownPlan, attacker: THREE.Vector3, out: ShotPlacement[]): void {
+    const up = plan.centre.clone().normalize();
+    const ref = Math.abs(up.y) < 0.99 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const east = new THREE.Vector3().crossVectors(ref, up).normalize();
+    const north = new THREE.Vector3().crossVectors(up, east);
+
+    // The enemy's bearing, flattened onto the ground the town stands on.
+    const toEnemy = attacker.clone().addScaledVector(up, -attacker.dot(up));
+    const bearing = toEnemy.lengthSq() > 1e-9
+      ? Math.atan2(toEnemy.dot(north), toEnemy.dot(east))
+      : 0;
+
+    const rng = makeRng(mixSeed(this.worldSeed, plan.cell * 7717 + 13));
+    const dir = new THREE.Vector3();
+    const ground = (a: number, b: number, lift: number): THREE.Vector3 => {
+      dir
+        .copy(up)
+        .addScaledVector(east, a / PLANET_RADIUS)
+        .addScaledVector(north, b / PLANET_RADIUS)
+        .normalize();
+      const h = this.field.height(dir.x, dir.y, dir.z, 0.5);
+      return dir.clone().multiplyScalar(PLANET_RADIUS + h + lift);
+    };
+
+    for (let i = 0; i < SIEGE_SHOTS; i++) {
+      // A line, not a ring: an army is on one side of the town.
+      const from = bearing + rng.range(-0.7, 0.7);
+      const into = from + rng.range(-0.5, 0.5);
+      const out0 = plan.radius * rng.range(1.35, 1.85);
+      const in0 = plan.radius * rng.range(0.05, 0.9);
+      out.push({
+        from: ground(Math.cos(from) * out0, Math.sin(from) * out0, 1.6),
+        to: ground(Math.cos(into) * in0, Math.sin(into) * in0, 0.2),
+        arc: rng.range(7, 16),
+        rate: rng.range(0.22, 0.42),
+        phase: rng.next(),
+      });
+    }
+  }
 
   /**
    * Where the camera is actually looking, on the ground.
@@ -234,6 +432,7 @@ export class GroundDetail {
             banner: [0.85, 0.3, 0.25],
             lamps: 1,
             roadColor: [0.3, 0.28, 0.26],
+            attacker: null,
           },
         ]);
       }
@@ -385,11 +584,13 @@ export class GroundDetail {
 
     // --- Upload, but only when something actually changed -------------------
 
+    const front = this.front(settlements, polities, positions);
     const active: Active[] = [];
     let signature = '';
     for (const c of candidates) {
       const plan = this.plans.get(c.cell);
       if (!plan) continue;
+      const attacker = front.get(c.cell) ?? this.mockAttacker(c.cell, positions);
       active.push({
         cell: c.cell,
         distance: c.distance,
@@ -397,10 +598,13 @@ export class GroundDetail {
         banner: c.banner,
         lamps: c.style.lamps,
         roadColor: c.style.road,
+        attacker,
       });
       // Distance is quantised so ordinary camera motion does not force a
-      // rebuild every frame, but crossing a band boundary does.
-      signature += `${c.cell}:${plan.signature}:${(c.distance / 64) | 0}|`;
+      // rebuild every frame, but crossing a band boundary does. Whether the
+      // town is burning is not quantised: a war starting is exactly the kind of
+      // change that has to reach the screen the moment the simulation says so.
+      signature += `${c.cell}:${plan.signature}:${(c.distance / 64) | 0}:${attacker ? 1 : 0}|`;
     }
 
     // Vegetation outside the towns. Follows the view centre rather than the
@@ -427,6 +631,10 @@ export class GroundDetail {
     this.roads.begin();
     this.props.begin();
     this.people.begin();
+    this.fires.begin();
+    this.banners.begin();
+    this.smoke.begin();
+    this.siege.begin();
 
     const scale = this.rangeScale;
     let lampWeight = 0;
@@ -457,7 +665,39 @@ export class GroundDetail {
         for (const p of plan.props) this.props.add(p);
       }
       if (near < PEOPLE_FAR * scale) {
-        for (const p of plan.people) this.people.add(p, town.banner);
+        for (const p of plan.people) this.people.add(p, town.banner, plan.era);
+      }
+      if (near < FIRE_FAR * scale) {
+        for (const f of plan.fires) this.fires.add(f);
+      }
+      if (near < BANNER_FAR * scale) {
+        for (const b of plan.banners) this.banners.add(b, town.banner);
+      }
+
+      // --- The war, if there is one here ------------------------------------
+
+      if (!town.attacker) continue;
+      if (near < SMOKE_FAR * scale) {
+        // Rooted on the roofs of buildings spread through the town rather than
+        // on a ring around it: what is burning is the settlement, and a column
+        // standing in an empty field beside one reads as a bonfire.
+        const all = plan.buildings;
+        const columns = Math.min(BURNING_MAX, 2 + ((all.length / 26) | 0));
+        const stride = Math.max(1, (all.length / columns) | 0);
+        for (let n = 0; n < columns; n++) {
+          const b = all[n * stride];
+          if (!b) break;
+          this.smoke.add({
+            origin: b.origin,
+            size: 34 + (n % 3) * 16,
+            phase: (n * 0.37) % 1,
+          });
+        }
+      }
+      if (near < SIEGE_FAR * scale) {
+        this.shots.length = 0;
+        this.siegeShots(plan, town.attacker, this.shots);
+        for (const shot of this.shots) this.siege.add(shot);
       }
     }
 
@@ -465,6 +705,10 @@ export class GroundDetail {
     this.roads.commit();
     this.props.commit();
     this.people.commit();
+    this.fires.commit();
+    this.banners.commit();
+    this.smoke.commit();
+    this.siege.commit();
 
     // Window and street lighting follows whoever is actually on screen, so
     // flying from a medieval town to an industrial one brightens the night.
@@ -478,10 +722,18 @@ export class GroundDetail {
     this.roads.begin();
     this.props.begin();
     this.people.begin();
+    this.fires.begin();
+    this.banners.begin();
+    this.smoke.begin();
+    this.siege.begin();
     this.buildings.commit();
     this.roads.commit();
     this.props.commit();
     this.people.commit();
+    this.fires.commit();
+    this.banners.commit();
+    this.smoke.commit();
+    this.siege.commit();
     this.townCount = 0;
     this.uploaded = '';
     this.wild.clear();
@@ -496,6 +748,10 @@ export class GroundDetail {
       roadTris: this.roads.triangles,
       plants: this.props.instanceCount,
       people: this.people.instanceCount,
+      fires: this.fires.instanceCount,
+      banners: this.banners.instanceCount,
+      burning: this.smoke.instanceCount,
+      shots: this.siege.instanceCount,
       planMs: this.lastPlanMs,
       wildMs: this.wild.buildMs,
       wildPlants: this.wild.props.length,
@@ -515,6 +771,10 @@ export class GroundDetail {
     this.roads.dispose();
     this.props.dispose();
     this.people.dispose();
+    this.fires.dispose();
+    this.banners.dispose();
+    this.smoke.dispose();
+    this.siege.dispose();
     this.plans.clear();
   }
 }

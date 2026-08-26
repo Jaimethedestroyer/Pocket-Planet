@@ -12,7 +12,40 @@ regardless of what the player has asked history to do.
 
 ---
 
-## What the last pass did, so it is not done twice
+## What the sprite pass did, so it is not done twice
+
+The ten pre-rendered sheets in `src/assets/sprites/` are all in the game, and
+the two procedural atlases they replaced are gone. `render/ground/sheets.ts` is
+the only place a sheet is loaded; `docs/ASSET-STYLE.md` now states the contract
+the shaders actually implement, which is not the one it originally asked for —
+these are finished colour, not masks, and two of its non-negotiables were
+reversed to take them.
+
+- **§3 *Night by era* is done.** `ground/fires.ts` draws campfires, torches,
+  braziers and chimney plumes off one instance buffer; `style.ts` decides how
+  many of each an era keeps, and window emission at the primitive and ancient
+  end is down to almost nothing. One material serves both the additive flames
+  and the lit smoke, via premultiplied blending. **Not** done: the beacon fire
+  on a primitive coastal headland. It wants a search around the town rim for
+  ground that faces the sea, and it is the one thing in that section that could
+  not be hung off a building.
+- **§2 *Wars you can see* is half done.** Burning settlements, and projectiles,
+  which were the second and last items on the list. `detail.ts` infers the front
+  as the closest pair of settlements across a war, so exactly the two towns the
+  war is over burn rather than every settlement of a belligerent. **Not** done,
+  and still worth doing in this order: contested borders pulsing in the
+  territory field, war ruins distinct from abandonment ruins, and roads that
+  close between belligerents.
+- **Banners** are new and were not on any list: a pennant on a mast over the
+  civic building and the great work, tinted at upload rather than in the plan,
+  so conquest repaints them without replanning the town.
+- **People are dressed by era** — four walk cycles stacked into one atlas, era
+  picking the row. It is the clearest reading of a civilization's age there is
+  at street level, and it costs one attribute.
+
+---
+
+## What the pass before that did, so it is not done twice
 
 - Building overlap is a separating-axis test on rotated rectangles
   (`ground/plot.ts`), not a circle. Plots are allocated as *runs of frontage*
@@ -69,51 +102,51 @@ reading at 9×.
 
 ## 2. Wars you can see
 
-The chronicle says two states are at war and nothing on the planet does. This
-is the biggest gap between what the simulation knows and what the player sees.
+*Partly done — see the top of this file. What follows is what is left.*
+
+The chronicle says two states are at war and the planet now says so at the front
+line. What it does not yet say is anything at all from orbit, which is where
+wars are actually watched from.
 
 Ordered cheapest first:
 
 - **Contested borders.** The territory field already knows who holds what; a
   border between two states at war could pulse, redden, or thicken. Nearly
   free, and legible from orbit, which is where wars are watched from.
-- **Burning settlements.** A settlement that changes hands or loses population
-  sharply gets a smoke column for a few decades. Uses the smoke sprite from
-  `ASSET-STYLE.md`, and it is visible at exactly the altitude wars are watched
-  from.
+- ~~**Burning settlements.**~~ Done, in `ground/war.ts`. Driven by the front
+  line rather than by a population drop, which is a cheaper signal and a better
+  one: it is the town being fought over that burns. Worth revisiting if the
+  simulation ever reports a sack directly.
 - **Ruins from war**, distinct from ruins from abandonment — blackened, not
   merely weathered.
 - **Roads that close.** The chronicle already says "the roads are closed" when
   plague spreads. `network.ts` knows which pairs of towns are joined and by
   which polities; a route between two states at war could simply not be drawn.
   Nearly free, and it makes the network mean something.
-- **Projectiles between besieging positions.** What was asked for, and the
-  right thing to do *last*: it only reads at close range, where the player
-  rarely is during a war, and it needs an arc, a lifetime and a pooled
-  instanced layer. Do the four above first and see whether it is still wanted.
+- ~~**Projectiles between besieging positions.**~~ Done, in `ground/war.ts`,
+  and it turned out cheaper than feared: an instance is a *shot* that repeats,
+  so the arc, the stretch along the velocity, the dust at the far end and the
+  wait before the next one are all a function of time and a phase. The arrow
+  pass and the impact pass share one instance buffer read at two different
+  points in the cycle. The caution stands, though — it only reads in the last
+  hundred metres, and the three items above it are still what a war looks like
+  from where a war is watched.
 
 ---
 
 ## 3. Night by era
 
-**What it looks like.** Every settlement glows from window emission, scaled by
-an era `lamps` value (primitive 0.30 → industrial 1.0). So a primitive village
-reads as a dim modern town rather than as a handful of fires in the dark.
+*Done, apart from the last item — see the top of this file.*
 
-**What to do.**
+What is left of it:
 
-- Add a **fire layer**: additive billboards at hearths, gates and the town
-  centre, using the fire sheet from `ASSET-STYLE.md`. Flickering, warm, few.
-  The town square is now a real object with a known boundary and a known
-  centre, which is exactly where the brazier goes.
-- Make primitive and ancient settlements light *only* from fires, with window
-  emission scaled to nearly nothing.
-- Medieval: fires plus dim windows plus the odd torch.
-- Industrial: keep what exists, and the roadmap's "city lights by era" note
-  applies — a cold white-blue at the industrial end, so the age of a
-  civilization is legible from orbit at night.
 - A **primitive coastal settlement** should get a beacon fire on the headland,
-  which is the thing the lighthouse gate took away from it.
+  which is the thing the lighthouse gate took away from it. Everything else in
+  this section hangs off a building the planner already placed; this one does
+  not, and wants a search around the town rim for ground that faces the sea.
+- The roadmap's **"city lights by era"** note still applies at the orbital end:
+  a cold white-blue at the industrial end, so the age of a civilization is
+  legible from orbit at night. The fire layer only reaches to 780 m.
 
 ---
 

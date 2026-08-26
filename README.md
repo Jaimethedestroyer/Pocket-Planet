@@ -72,8 +72,18 @@ The planet, the simulation living on it, and an interface to nudge it.
   you climb. Shorelines surge in and out, break into foam, and refract the sea floor.
 - **Towns you can walk into.** Below about a kilometre a settlement stops being a marker
   and becomes a place: streets laid first, buildings hung off them, fields beyond the last
-  house, and people walking in the final few metres of a descent. Twenty-nine models,
-  four eras, all procedural — nothing in this game ships as an asset.
+  house, and people walking in the final few metres of a descent. Twenty-nine building
+  models across four eras, every one of them procedural.
+- **People who are dressed for their century**, and woods made of real trees. The
+  billboards — four era walk cycles, the plants, fire, smoke, banners and arrows — are
+  pre-rendered sheets in `src/assets/sprites/`, which is the one place this project ships
+  an asset rather than drawing it. Three hundred kilobytes buys believable anatomy and
+  actual bark, and a stick figure was never going to get there.
+- **Night by era, and wars you can see.** A primitive village is a handful of fires in
+  the dark; a medieval one is torches and chimney smoke; an industrial one is lit
+  windows and working roofs. A settlement on the front line of a war burns, flies its
+  conqueror's banner the century it changes hands, and — in the last hundred metres of
+  a descent — has arrows coming over the wall.
 - **Ruins that are real places.** A settlement that empties leaves its name and its stones
   for someone to find and resettle centuries later.
 - **A visual regression harness** that drives the camera to fixed viewpoints and captures

@@ -29,6 +29,7 @@ import { PLANET_RADIUS } from '../../planet/config';
 import { makeRng, mixSeed } from '../../core/rng';
 import type { PlanetField } from '../../planet/heightfield';
 import type { PropPlacement } from './plan';
+import { foliageTint } from './style';
 
 /** Candidate points tested per rebuild. Roughly a third of them take. */
 const SCATTER_COUNT = 900;
@@ -213,17 +214,12 @@ export class Wilderness {
       else if (ground.moisture < 0.32) kind = 3;
       else if (ground.temperature > 0.74 && ground.moisture < 0.48) kind = 3;
 
-      const lush = 0.5 + ground.moisture * 0.8;
       out.push({
         origin: this.dir.clone().multiplyScalar(PLANET_RADIUS + ground.height - 0.25),
         rot: rng.next() * Math.PI,
         size: kind === 3 ? rng.range(1.4, 2.6) : rng.range(3.0, 7.0),
         kind,
-        tint: [
-          rng.range(0.08, 0.19) * lush,
-          rng.range(0.17, 0.32) * lush,
-          rng.range(0.05, 0.14) * lush,
-        ],
+        tint: foliageTint(rng, kind, ground.moisture),
       });
     }
   }

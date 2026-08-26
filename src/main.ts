@@ -76,6 +76,11 @@ if (Object.keys(view).length > 0) app.setView(view);
 const kit = params.get('kit');
 if (kit !== null) app.ground.setShowcase(kit === 'all' ? 'all' : Number(kit));
 
+// `?siege=1` puts every town in view under attack — smoke, arrows and dust —
+// without waiting for the simulation to start a war somewhere you happen to be
+// looking. Development only; see GroundDetail.setSiege.
+if (params.get('siege') === '1') app.ground.setSiege(true);
+
 // --- Game interface --------------------------------------------------------
 
 const gameHud = new Hud(app.sim);
@@ -199,6 +204,7 @@ declare global {
       setView(view: ViewState): void;
       isSettled(): boolean;
       setClouds(coverage: number | null): void;
+      setSiege(on: boolean): void;
       stats(): Record<string, number>;
       skipBoot(): void;
       runYears(years: number): void;
@@ -221,6 +227,7 @@ window.pocketPlanet = {
   },
   isSettled: () => app.isSettled(),
   setClouds: (coverage) => app.setClouds(coverage),
+  setSiege: (on) => app.ground.setSiege(on),
   stats: () => app.getStats(),
   skipBoot: () => {
     booted = true;

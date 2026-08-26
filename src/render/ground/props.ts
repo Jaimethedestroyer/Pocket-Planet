@@ -7,6 +7,9 @@
  * do not turn at all: they hold their silhouette from every angle, they self-
  * occlude, and they cost eight triangles against a model's several hundred.
  *
+ * The cards themselves are pre-rendered plants — see sheets.ts — so unlike
+ * everything else here the texture carries finished colour rather than a mask.
+ *
  * Lighting foliage by its face normal is the mistake that makes crossed quads
  * look like cardboard: half the tree is lit and half is black, along a hard
  * vertical seam. Bending the normal towards the surface up-vector — and adding
@@ -16,7 +19,7 @@
 
 import * as THREE from 'three';
 import type { SharedUniforms } from '../environment';
-import { vegetationAtlas } from './textures';
+import { spriteSheets } from './sheets';
 import type { PropPlacement } from './plan';
 
 export const PROP_NEAR = 320;
@@ -104,7 +107,13 @@ void main() {
   vec4 tex = texture2D(tAtlas, vUv);
   if (tex.a < 0.42) discard;
 
-  vec3 albedo = vTint * (0.45 + tex.r * 0.85);
+  // The sheet is finished art rather than a mask, so this is albedo. The tint
+  // is a modulation about one — a little drier here, a little lusher there —
+  // which is what stops a wood reading as one photograph printed nine hundred
+  // times, without making every tree on the planet the same green.
+  vec3 albedo = tex.rgb * vTint;
+  // Canopy density, for the light that comes *through* the leaves.
+  float mass = dot(tex.rgb, vec3(0.2126, 0.7152, 0.0722));
 
   vec3 up = normalize(vUp);
   // Bend the card's normal towards up. A flat card lit by its own normal is
@@ -120,7 +129,7 @@ void main() {
   // Transmission: leaves are thin, so the sun behind a canopy comes through it.
   vec3 V = normalize(cameraPosition - vWorldPos);
   float through = pow(max(0.0, dot(-V, uSunDir)), 3.0);
-  lit += albedo * uSunColor * uSunIntensity * through * 0.35 * tex.r;
+  lit += albedo * uSunColor * uSunIntensity * through * 0.9 * mass;
 
   gl_FragColor = vec4(lit, 1.0);
 }
@@ -131,7 +140,6 @@ export class PropLayer {
 
   private geometry: THREE.InstancedBufferGeometry;
   private material: THREE.ShaderMaterial;
-  private atlas: THREE.CanvasTexture;
 
   private capacity = 0;
   private count = 0;
@@ -142,8 +150,6 @@ export class PropLayer {
   private tint!: THREE.InstancedBufferAttribute;
 
   constructor(shared: SharedUniforms) {
-    this.atlas = vegetationAtlas();
-
     this.geometry = new THREE.InstancedBufferGeometry();
     // Two quads, distinguished by z: the vertex shader turns that into a
     // ninety-degree rotation rather than a position.
@@ -164,7 +170,7 @@ export class PropLayer {
       vertexShader,
       fragmentShader,
       uniforms: {
-        tAtlas: { value: this.atlas },
+        tAtlas: { value: spriteSheets().vegetation },
         uSunDir: shared.uSunDir,
         uSunColor: shared.uSunColor,
         uSunIntensity: shared.uSunIntensity,
@@ -266,6 +272,5 @@ export class PropLayer {
   dispose(): void {
     this.geometry.dispose();
     this.material.dispose();
-    this.atlas.dispose();
   }
 }

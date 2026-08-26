@@ -13,6 +13,7 @@ import { createTerrainMaterial, updateTerrainDetail } from './render/materials/t
 import { RenderPipeline } from './render/post/pipeline';
 import { SettlementLayer } from './render/settlements';
 import { GroundDetail } from './render/ground/detail';
+import { spritesReady } from './render/ground/sheets';
 import { SimClient } from './game/simClient';
 import { PERSIST_BY_DEFAULT } from './game/save';
 import { hashSeed } from './core/rng';
@@ -301,7 +302,12 @@ export class PocketPlanetApp {
 
   isSettled(): boolean {
     const t = this.terrain.getStats();
-    return this.terrain.isReady() && t.pending === 0 && t.queued === 0;
+    // The sprite sheets count. They are the trees and the people, they arrive
+    // in a few milliseconds over the same connection the page came down, and
+    // waiting on them here is what stops the world being revealed bare and then
+    // furnishing itself. `spritesReady` gives up on a sheet that failed rather
+    // than holding the boot screen open for good.
+    return this.terrain.isReady() && t.pending === 0 && t.queued === 0 && spritesReady();
   }
 
   setView(view: ViewState): void {

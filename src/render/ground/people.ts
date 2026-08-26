@@ -15,12 +15,19 @@
  * Everything is on the GPU. The CPU uploads a person once and never touches
  * them again; time drives the position, the frame of the walk cycle and which
  * way they are facing.
+ *
+ * The four era sheets are stacked into one atlas (see sheets.ts), so a region
+ * holding an industrial city and a neighbouring medieval town is still a single
+ * draw call — the era is a per-person attribute picking a row. It is the era
+ * that dresses them, and it is the clearest reading of a civilization's age
+ * there is at street level: furs, then robes, then hoods, then long coats.
  */
 
 import * as THREE from 'three';
 import type { SharedUniforms } from '../environment';
-import { WALK_FRAMES, peopleAtlas } from './textures';
+import { PEOPLE_ROWS, WALK_FRAMES, spriteSheets } from './sheets';
 import type { PersonPlacement } from './plan';
+import type { Era } from '../../sim/types';
 
 export const PEOPLE_NEAR = 120;
 export const PEOPLE_FAR = 260;
@@ -34,16 +41,18 @@ attribute vec3 iFrom;
 attribute vec3 iTo;
 attribute float iPhase;
 attribute float iSpeed;
-attribute vec3 iSkin;
+attribute float iEra;
+attribute vec3 iTone;
 attribute vec3 iCloth;
 
 uniform float uTime;
 uniform float uFadeNear;
 uniform float uFadeFar;
 uniform float uFrames;
+uniform float uRows;
 
 varying vec2 vUv;
-varying vec3 vSkin;
+varying vec3 vTone;
 varying vec3 vCloth;
 varying vec3 vUp;
 varying vec3 vWorldPos;
@@ -88,9 +97,12 @@ void main() {
   // stride more slowly than one crossing a short one.
   float frame = floor(fract(uTime * iSpeed * 0.85 + iPhase * 7.0) * uFrames);
   float u = (quad.x * facing + 0.5);
-  vUv = vec2((frame + u) / uFrames, quad.y);
+  // Era picks the row. The atlas is uploaded flipped, so era zero — the
+  // primitive sheet, drawn along the top of the canvas — is the top of v.
+  float row = uRows - 1.0 - iEra;
+  vUv = vec2((frame + u) / uFrames, (row + quad.y) / uRows);
 
-  vSkin = iSkin;
+  vTone = iTone;
   vCloth = iCloth;
   vUp = up;
   vWorldPos = world;
@@ -109,19 +121,26 @@ uniform float uSunIntensity;
 uniform vec3 uAmbientColor;
 
 varying vec2 vUv;
-varying vec3 vSkin;
+varying vec3 vTone;
 varying vec3 vCloth;
 varying vec3 vUp;
 varying vec3 vWorldPos;
 
-void main() {
-  vec4 mask = texture2D(tAtlas, vUv);
-  if (mask.a < 0.4) discard;
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 
-  // Red is clothes, green is skin, blue is hair. One atlas, everybody.
-  float total = max(mask.r + mask.g + mask.b, 1e-3);
-  vec3 albedo =
-    (vCloth * mask.r + vSkin * mask.g + vec3(0.09, 0.07, 0.06) * mask.b) / total;
+void main() {
+  vec4 texel = texture2D(tAtlas, vUv);
+  if (texel.a < 0.4) discard;
+
+  // The sheet is a photograph of somebody, not a set of masks, so there is no
+  // garment channel left to dye. A crowd still has to read as *whose* crowd it
+  // is, so the polity's colour goes on as a wash held to the sprite's own
+  // brightness — it shifts the hue and leaves the form alone. Enough to tell
+  // two towns apart at thirty metres; not enough to turn a street into a
+  // parade, which is what dyeing the whole figure would do.
+  float lum = dot(texel.rgb, LUMA);
+  vec3 wash = vCloth * (lum / max(dot(vCloth, LUMA), 1e-3));
+  vec3 albedo = mix(texel.rgb, wash, 0.22) * vTone;
 
   // Lit as a standing cylinder rather than as a flat card: mostly facing the
   // viewer, tilted a quarter of the way towards the sky. Lighting a billboard
@@ -145,7 +164,6 @@ export class PeopleLayer {
 
   private geometry: THREE.InstancedBufferGeometry;
   private material: THREE.ShaderMaterial;
-  private atlas: THREE.CanvasTexture;
 
   private capacity = 0;
   private count = 0;
@@ -153,14 +171,13 @@ export class PeopleLayer {
   private to!: THREE.InstancedBufferAttribute;
   private phase!: THREE.InstancedBufferAttribute;
   private speed!: THREE.InstancedBufferAttribute;
-  private skin!: THREE.InstancedBufferAttribute;
+  private era!: THREE.InstancedBufferAttribute;
+  private tone!: THREE.InstancedBufferAttribute;
   private cloth!: THREE.InstancedBufferAttribute;
 
   private scratch = new THREE.Vector3();
 
   constructor(shared: SharedUniforms) {
-    this.atlas = peopleAtlas();
-
     this.geometry = new THREE.InstancedBufferGeometry();
     this.geometry.setAttribute(
       'position',
@@ -175,7 +192,7 @@ export class PeopleLayer {
       vertexShader,
       fragmentShader,
       uniforms: {
-        tAtlas: { value: this.atlas },
+        tAtlas: { value: spriteSheets().people },
         uSunDir: shared.uSunDir,
         uSunColor: shared.uSunColor,
         uSunIntensity: shared.uSunIntensity,
@@ -184,6 +201,7 @@ export class PeopleLayer {
         uFadeNear: { value: PEOPLE_NEAR },
         uFadeFar: { value: PEOPLE_FAR },
         uFrames: { value: WALK_FRAMES },
+        uRows: { value: PEOPLE_ROWS },
       },
       side: THREE.DoubleSide,
     });
@@ -203,7 +221,8 @@ export class PeopleLayer {
           to: (this.to.array as Float32Array).slice(0, this.count * 3),
           phase: (this.phase.array as Float32Array).slice(0, this.count),
           speed: (this.speed.array as Float32Array).slice(0, this.count),
-          skin: (this.skin.array as Float32Array).slice(0, this.count * 3),
+          era: (this.era.array as Float32Array).slice(0, this.count),
+          tone: (this.tone.array as Float32Array).slice(0, this.count * 3),
           cloth: (this.cloth.array as Float32Array).slice(0, this.count * 3),
         }
       : null;
@@ -218,13 +237,15 @@ export class PeopleLayer {
     this.to = make(3);
     this.phase = make(1);
     this.speed = make(1);
-    this.skin = make(3);
+    this.era = make(1);
+    this.tone = make(3);
     this.cloth = make(3);
     this.geometry.setAttribute('iFrom', this.from);
     this.geometry.setAttribute('iTo', this.to);
     this.geometry.setAttribute('iPhase', this.phase);
     this.geometry.setAttribute('iSpeed', this.speed);
-    this.geometry.setAttribute('iSkin', this.skin);
+    this.geometry.setAttribute('iEra', this.era);
+    this.geometry.setAttribute('iTone', this.tone);
     this.geometry.setAttribute('iCloth', this.cloth);
 
     if (keep) {
@@ -232,7 +253,8 @@ export class PeopleLayer {
       (this.to.array as Float32Array).set(keep.to);
       (this.phase.array as Float32Array).set(keep.phase);
       (this.speed.array as Float32Array).set(keep.speed);
-      (this.skin.array as Float32Array).set(keep.skin);
+      (this.era.array as Float32Array).set(keep.era);
+      (this.tone.array as Float32Array).set(keep.tone);
       (this.cloth.array as Float32Array).set(keep.cloth);
     }
   }
@@ -241,8 +263,14 @@ export class PeopleLayer {
     this.count = 0;
   }
 
-  /** `cloth` is the polity's colour: a crowd reads as whose crowd it is. */
-  add(p: PersonPlacement, cloth: [number, number, number]): void {
+  /**
+   * `cloth` is the polity's colour, and `era` picks which sheet they wear.
+   *
+   * Both come from the town rather than from the person: a crowd reads as whose
+   * crowd it is and as *when* it is, and neither of those is a property of any
+   * individual walking down the street.
+   */
+  add(p: PersonPlacement, cloth: [number, number, number], era: Era): void {
     if (this.count >= this.capacity) this.grow(this.capacity * 2);
     const i = this.count++;
 
@@ -260,13 +288,14 @@ export class PeopleLayer {
 
     (this.phase.array as Float32Array)[i] = p.phase;
     (this.speed.array as Float32Array)[i] = p.speed;
-    const s = this.skin.array as Float32Array;
-    s[i * 3] = p.tint[0];
-    s[i * 3 + 1] = p.tint[1];
-    s[i * 3 + 2] = p.tint[2];
-    // What they are wearing, with a third of the polity's colour mixed in.
-    // Enough that a crowd reads as *whose* crowd it is; not so much that a
-    // street of people looks like a parade.
+    (this.era.array as Float32Array)[i] = era;
+    const s = this.tone.array as Float32Array;
+    s[i * 3] = p.tone[0];
+    s[i * 3 + 1] = p.tone[1];
+    s[i * 3 + 2] = p.tone[2];
+    // The colour the wash in the fragment shader carries: mostly what this
+    // person happens to be wearing, with a third of the polity's colour mixed
+    // in so a crowd reads as *whose* crowd it is.
     const c = this.cloth.array as Float32Array;
     for (let k = 0; k < 3; k++) {
       c[i * 3 + k] = p.cloth[k] * 0.68 + cloth[k] * 0.32;
@@ -281,7 +310,8 @@ export class PeopleLayer {
     this.to.needsUpdate = true;
     this.phase.needsUpdate = true;
     this.speed.needsUpdate = true;
-    this.skin.needsUpdate = true;
+    this.era.needsUpdate = true;
+    this.tone.needsUpdate = true;
     this.cloth.needsUpdate = true;
   }
 
@@ -297,6 +327,5 @@ export class PeopleLayer {
   dispose(): void {
     this.geometry.dispose();
     this.material.dispose();
-    this.atlas.dispose();
   }
 }

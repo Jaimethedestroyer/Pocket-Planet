@@ -15,6 +15,7 @@
 
 import { Era } from '../../sim/types';
 import { hashSeed, makeRng } from '../../core/rng';
+import type { Rng } from '../../core/rng';
 import type { ArchetypeName } from './archetypes';
 
 export type Rgb = [number, number, number];
@@ -48,8 +49,36 @@ export interface TownStyle {
   layout: 'cluster' | 'grid' | 'organic' | 'avenue';
   /** How far the town's built area reaches, as a multiple of the tier radius. */
   spread: number;
-  /** Window emission at night, 0..1. A primitive town is nearly dark. */
+  /**
+   * Window emission at night, 0..1.
+   *
+   * Held low at the primitive and ancient end now that fires exist. A hut has
+   * no glazing to glow out of, and a civilization that has not invented the
+   * lamp should read as sparks in the dark rather than as a dim version of a
+   * modern town; what light those settlements have comes off `hearths` below.
+   */
   lamps: number;
+  /**
+   * How a town lights itself, as a chance per building that one is added.
+   *
+   * The whole point of these is that they change with the era rather than
+   * merely dimming: a primitive village is open fires on the ground, an ancient
+   * one keeps a brazier in its civic space, a medieval one is torches and
+   * chimneys, and an industrial one is chimneys and street lighting. Read them
+   * down the column and the age of the place is legible after dark.
+   */
+  hearths: {
+    /** An open fire on the ground beside the house. */
+    campfire: number;
+    /** A bracket torch, up the wall. */
+    torch: number;
+    /** A contained fire, for anywhere civic. */
+    brazier: number;
+    /** A plume off the roof, which is the one that reads by day. */
+    chimney: number;
+  };
+  /** What burns in the middle of the square: a fire kind, or -1 for nothing. */
+  squareFire: number;
   /** How strongly walls read as courses of a block material, 0..1. */
   courses: number;
 }
@@ -76,7 +105,9 @@ const BASE: Record<Era, Omit<TownStyle, 'era'>> = {
     frontage: 8.5,
     layout: 'cluster',
     spread: 0.72,
-    lamps: 0.30,
+    lamps: 0.06,
+    hearths: { campfire: 0.42, torch: 0, brazier: 0, chimney: 0.20 },
+    squareFire: 0,
     courses: 0.12,
   },
   [Era.Ancient]: {
@@ -103,7 +134,9 @@ const BASE: Record<Era, Omit<TownStyle, 'era'>> = {
     frontage: 9.5,
     layout: 'grid',
     spread: 0.85,
-    lamps: 0.52,
+    lamps: 0.20,
+    hearths: { campfire: 0.20, torch: 0.10, brazier: 0.05, chimney: 0.32 },
+    squareFire: 2,
     courses: 0.55,
   },
   [Era.Medieval]: {
@@ -130,7 +163,9 @@ const BASE: Record<Era, Omit<TownStyle, 'era'>> = {
     frontage: 8.0,
     layout: 'organic',
     spread: 1.0,
-    lamps: 0.72,
+    lamps: 0.62,
+    hearths: { campfire: 0.05, torch: 0.24, brazier: 0.04, chimney: 0.55 },
+    squareFire: 2,
     courses: 0.7,
   },
   [Era.Industrial]: {
@@ -156,6 +191,8 @@ const BASE: Record<Era, Omit<TownStyle, 'era'>> = {
     layout: 'avenue',
     spread: 1.25,
     lamps: 1.0,
+    hearths: { campfire: 0.02, torch: 0.05, brazier: 0, chimney: 0.78 },
+    squareFire: -1,
     courses: 1.0,
   },
 };
@@ -227,5 +264,38 @@ export function samplePalette(a: Rgb, b: Rgb, t: number, jitter = 0): Rgb {
     Math.min(1, (a[0] + (b[0] - a[0]) * t) * j),
     Math.min(1, (a[1] + (b[1] - a[1]) * t) * j),
     Math.min(1, (a[2] + (b[2] - a[2]) * t) * j),
+  ];
+}
+
+/**
+ * How one plant differs from the next.
+ *
+ * The vegetation sheet is one pre-rendered photograph per species, so without
+ * this a wood is that photograph printed nine hundred times and reads as
+ * wallpaper. It is a modulation about one rather than a colour: the leaves are
+ * already the right green, and the job here is only to say that this tree
+ * catches more light than that one, and that the ones on the dry side of the
+ * hill have gone over to yellow.
+ */
+export function foliageTint(rng: Rng, kind: number, moisture: number): Rgb {
+  const damp = Math.min(1, Math.max(0, moisture));
+  const dry = 1 - damp;
+  const value = rng.range(0.82, 1.16);
+
+  // A crop ripens rather than withers, so its variation runs green to gold
+  // along the season instead of tracking how wet the ground is.
+  if (kind === 1) {
+    const ripe = rng.range(-0.12, 0.12);
+    return [
+      value * (1 + ripe * 0.9),
+      value * (1 + ripe * 0.3),
+      value * (1 - ripe * 0.6),
+    ];
+  }
+
+  return [
+    value * (0.94 + dry * 0.30 + rng.range(-0.05, 0.05)),
+    value * (1.00 + damp * 0.06 - dry * 0.08 + rng.range(-0.05, 0.05)),
+    value * (0.96 + damp * 0.14 - dry * 0.22 + rng.range(-0.05, 0.05)),
   ];
 }

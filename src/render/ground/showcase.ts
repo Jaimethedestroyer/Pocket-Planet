@@ -133,5 +133,7 @@ export function kitShowcase(
     plazas: [],
     props: [],
     people: [],
+    fires: [],
+    banners: [],
   };
 }
